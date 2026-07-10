@@ -146,6 +146,10 @@ class KVCacheCommandModule:
 
 
 class StatusCommands(Plugin):
+    @classmethod
+    def dashboard_module(cls) -> str | None:
+        return "dashboard.py"
+
     name = "status_commands"
     version = "1.0.0"
 
