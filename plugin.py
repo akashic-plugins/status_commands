@@ -147,6 +147,7 @@ class KVCacheCommandModule:
 
 class StatusCommands(Plugin):
     name = "status_commands"
+    version = "1.0.0"
 
     def telegram_bot_commands(self) -> list[tuple[str, str]]:
         return [
