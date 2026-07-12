@@ -1,6 +1,6 @@
-// plugins/status_commands/dashboard_panel.tsx
+// ../akashic-plugin/status_commands/dashboard_panel.tsx
 import { useEffect, useState } from "react";
-import { Pie, api } from "@akashic/dashboard-ui";
+import { Grid, Pie, api } from "@akashic/dashboard-ui";
 import { jsx, jsxs } from "react/jsx-runtime";
 function _formatNumber(value) {
   return new Intl.NumberFormat("zh-CN").format(Number(value || 0));
@@ -62,7 +62,7 @@ function KvMain(_props) {
   return /* @__PURE__ */ jsxs("div", { className: "p-5", children: [
     /* @__PURE__ */ jsx("div", { className: "detail-title", children: "KV Cache" }),
     /* @__PURE__ */ jsx("div", { className: "detail-subtext", children: "\u6700\u8FD1\u51E0\u6B21 KVCache \u8C03\u7528 \xB7 token \u590D\u7528" }),
-    /* @__PURE__ */ jsxs("div", { className: "mt-5 grid gap-3", style: { gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }, children: [
+    /* @__PURE__ */ jsxs(Grid, { columns: 3, className: "mt-5", children: [
       /* @__PURE__ */ jsx("div", { className: "min-w-0 overflow-hidden rounded-lg border border-border bg-surface p-3 shadow-lift-sm animate-fade-up", children: /* @__PURE__ */ jsx(Pie, { title: `\u6700\u8FD1 10 \u6B21\u88AB\u52A8\u94FE\u8DEF \xB7 ${recentPassive.length} \u8F6E`, rate: recentPassiveRate, hit: recentPassiveHit, miss: recentPassiveMiss }) }),
       /* @__PURE__ */ jsx("div", { className: "min-w-0 overflow-hidden rounded-lg border border-border bg-surface p-3 shadow-lift-sm animate-fade-up", style: { animationDelay: "80ms" }, children: /* @__PURE__ */ jsx(Pie, { title: `\u5168\u5C40\u88AB\u52A8\u94FE\u8DEF \xB7 ${passive.tracked_turn_count} \u8F6E`, rate: passive.hit_rate, hit: passive.hit_tokens, miss: passive.miss_tokens }) }),
       /* @__PURE__ */ jsx("div", { className: "min-w-0 overflow-hidden rounded-lg border border-border bg-surface p-3 shadow-lift-sm animate-fade-up", style: { animationDelay: "160ms" }, children: /* @__PURE__ */ jsx(Pie, { title: `\u5168\u5C40\u4E3B\u52A8\u94FE\u8DEF \xB7 ${proactive.tracked_turn_count} \u8F6E`, rate: proactive.hit_rate, hit: proactive.hit_tokens, miss: proactive.miss_tokens }) })
