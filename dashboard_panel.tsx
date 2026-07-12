@@ -1,6 +1,6 @@
 /// <reference path="../../types/akashic-dashboard.d.ts" />
 import { useEffect, useState, type ReactElement } from "react";
-import { Pie, api } from "@akashic/dashboard-ui";
+import { Grid, Pie, api } from "@akashic/dashboard-ui";
 
 interface KVCacheSummary {
   tracked_turn_count: number;
@@ -108,7 +108,7 @@ function KvMain(_props: { dispatch: PluginDispatch }): ReactElement {
       <div className="detail-title">KV Cache</div>
       <div className="detail-subtext">最近几次 KVCache 调用 · token 复用</div>
 
-      <div className="mt-5 grid gap-3" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+      <Grid columns={3} className="mt-5">
         <div className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface p-3 shadow-lift-sm animate-fade-up">
           <Pie title={`最近 10 次被动链路 · ${recentPassive.length} 轮`} rate={recentPassiveRate} hit={recentPassiveHit} miss={recentPassiveMiss} />
         </div>
@@ -118,7 +118,7 @@ function KvMain(_props: { dispatch: PluginDispatch }): ReactElement {
         <div className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface p-3 shadow-lift-sm animate-fade-up" style={{ animationDelay: "160ms" }}>
           <Pie title={`全局主动链路 · ${proactive.tracked_turn_count} 轮`} rate={proactive.hit_rate} hit={proactive.hit_tokens} miss={proactive.miss_tokens} />
         </div>
-      </div>
+      </Grid>
 
       <div className="animate-fade-up mt-5 overflow-hidden rounded-lg border border-border" style={{ animationDelay: "220ms" }}>
         <div
