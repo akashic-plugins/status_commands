@@ -6,8 +6,12 @@ import sqlite3
 
 import pytest
 
-from dashboard import KVCacheDashboardReader
-from plugin import KVCacheCommandModule, MemoryStatusCommandModule
+from status_commands_source.kvcache_reader import KVCacheDashboardReader
+from status_commands_source.plugin import (
+    KVCacheCommandModule,
+    MemoryStatusCommandModule,
+    StatusCommands,
+)
 
 
 @pytest.mark.asyncio
@@ -125,3 +129,87 @@ def test_kvcache_dashboard_reader_summarizes_workspace_db(tmp_path) -> None:
     summary = KVCacheDashboardReader(tmp_path).get_summary()
     assert summary["tracked_turn_count"] == 1
     assert summary["hit_tokens"] == 260
+
+
+@pytest.mark.asyncio
+async def test_mobile_kvcache_rpc_reuses_dashboard_projection(tmp_path) -> None:
+    observe_dir = tmp_path / "observe"
+    observe_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(observe_dir / "observe.db")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE turns(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                source TEXT NOT NULL,
+                session_key TEXT NOT NULL,
+                user_msg TEXT,
+                react_cache_prompt_tokens INTEGER,
+                react_cache_hit_tokens INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO turns(
+                ts, source, session_key, user_msg,
+                react_cache_prompt_tokens, react_cache_hit_tokens
+            ) VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "2026-07-16T12:00:00+00:00",
+                "proactive",
+                "mobile:test",
+                "真实 Turn",
+                1_000,
+                880,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    plugin = StatusCommands()
+    plugin.context = SimpleNamespace(workspace=tmp_path)
+
+    overview = await plugin.mobile_ui_call(
+        "kvcache.overview",
+        {},
+        session_id=None,
+        turn_id=None,
+    )
+    page = await plugin.mobile_ui_call(
+        "kvcache.turns",
+        {"page": 1, "page_size": 25},
+        session_id=None,
+        turn_id=None,
+    )
+
+    assert overview["tracked_turn_count"] == 1
+    assert overview["proactive"]["hit_rate"] == pytest.approx(0.88)
+    assert page["total"] == 1
+    assert page["items"][0] == {
+        "id": 1,
+        "ts": "2026-07-16T12:00:00+00:00",
+        "source": "proactive",
+        "session_key": "mobile:test",
+        "user_preview": "真实 Turn",
+        "prompt_tokens": 1_000,
+        "hit_tokens": 880,
+        "miss_tokens": 120,
+        "hit_rate": 0.88,
+    }
+
+
+@pytest.mark.asyncio
+async def test_mobile_kvcache_rpc_rejects_invalid_pagination(tmp_path) -> None:
+    plugin = StatusCommands()
+    plugin.context = SimpleNamespace(workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="page_size"):
+        await plugin.mobile_ui_call(
+            "kvcache.turns",
+            {"page_size": 0},
+            session_id=None,
+            turn_id=None,
+        )
