@@ -1,19 +1,16 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 from zoneinfo import ZoneInfo
 
 from agent.lifecycle.types import BeforeTurnCtx, TurnState
 from agent.plugins import Plugin
 from agent.prompting import is_context_frame
-
-from .kvcache_reader import KVCacheDashboardReader
 
 logger = logging.getLogger("plugin.status_commands")
 
@@ -149,18 +146,6 @@ class KVCacheCommandModule:
 
 
 class StatusCommands(Plugin):
-    @classmethod
-    def dashboard_module(cls) -> str | None:
-        return "dashboard.py"
-
-    @classmethod
-    def mobile_ui_module(cls) -> str | None:
-        return "mobile_panel.js"
-
-    @classmethod
-    def mobile_ui_stylesheet(cls) -> str | None:
-        return "mobile_panel.css"
-
     name = "status_commands"
     version = "1.0.0"
 
@@ -183,44 +168,6 @@ class StatusCommands(Plugin):
             ],
         )
 
-    async def mobile_ui_call(
-        self,
-        method: str,
-        payload: dict[str, object],
-        *,
-        session_id: str | None,
-        turn_id: str | None,
-    ) -> dict[str, object]:
-        """返回与桌面 Dashboard 同源的 KV Cache 移动投影。"""
-
-        # 1. 在插件 RPC 边界校验方法与分页参数
-        if method not in {"kvcache.overview", "kvcache.turns"}:
-            raise ValueError(f"未知 KV Cache 移动方法: {method}")
-        workspace = self.context.workspace
-        if workspace is None:
-            raise RuntimeError("KV Cache 移动看板缺少 workspace")
-        reader = KVCacheDashboardReader(workspace)
-        if method == "kvcache.overview":
-            return cast("dict[str, object]", await asyncio.to_thread(reader.get_summary))
-        page = _mobile_page_value(payload, "page", default=1, maximum=10_000)
-        page_size = _mobile_page_value(payload, "page_size", default=25, maximum=50)
-        source = _mobile_source_value(payload)
-
-        # 2. 复用桌面 reader，并保留真实 Turn 字段
-        items, total = await asyncio.to_thread(
-            reader.list_turns,
-            page=page,
-            page_size=page_size,
-            source=source,
-        )
-        return {
-            "items": cast("list[object]", items),
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        }
-
-
 def _normalize_command(content: str) -> str:
     parts = (content or "").strip().split(maxsplit=1)
     if not parts:
@@ -229,28 +176,6 @@ def _normalize_command(content: str) -> str:
     if "@" in head:
         head = head.split("@", 1)[0]
     return head
-
-
-def _mobile_page_value(
-    payload: dict[str, object],
-    name: str,
-    *,
-    default: int,
-    maximum: int,
-) -> int:
-    value = payload.get(name, default)
-    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= maximum:
-        raise ValueError(f"{name} 必须是 1 到 {maximum} 的整数")
-    return value
-
-
-def _mobile_source_value(payload: dict[str, object]) -> Literal["agent"] | None:
-    value = payload.get("source")
-    if value is None:
-        return None
-    if value != "agent":
-        raise ValueError("source 只支持 agent")
-    return "agent"
 
 
 def _abort_ctx(state: TurnState, reply: str) -> BeforeTurnCtx:

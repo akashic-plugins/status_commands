@@ -2,6 +2,8 @@
 
 内置诊断命令拦截器。在 BeforeTurn 管道的早期阶段识别 `/memory_status` 和 `/kvcache` 命令，直接返回诊断报告，绕过后续的记忆检索和 LLM 推理。
 
+本插件不注册 Dashboard 或移动端界面。KV Cache 的采集、看板与 Turn 尾部统计由数据所有者 `observe` 插件提供；`/kvcache` 仅保留为命令行式只读入口。
+
 ---
 
 ## 接入点
