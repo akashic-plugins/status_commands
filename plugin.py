@@ -6,7 +6,7 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
 from agent.lifecycle.types import BeforeTurnCtx, TurnState
@@ -204,12 +204,14 @@ class StatusCommands(Plugin):
             return cast("dict[str, object]", await asyncio.to_thread(reader.get_summary))
         page = _mobile_page_value(payload, "page", default=1, maximum=10_000)
         page_size = _mobile_page_value(payload, "page_size", default=25, maximum=50)
+        source = _mobile_source_value(payload)
 
         # 2. 复用桌面 reader，并保留真实 Turn 字段
         items, total = await asyncio.to_thread(
             reader.list_turns,
             page=page,
             page_size=page_size,
+            source=source,
         )
         return {
             "items": cast("list[object]", items),
@@ -240,6 +242,15 @@ def _mobile_page_value(
     if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= maximum:
         raise ValueError(f"{name} 必须是 1 到 {maximum} 的整数")
     return value
+
+
+def _mobile_source_value(payload: dict[str, object]) -> Literal["agent"] | None:
+    value = payload.get("source")
+    if value is None:
+        return None
+    if value != "agent":
+        raise ValueError("source 只支持 agent")
+    return "agent"
 
 
 def _abort_ctx(state: TurnState, reply: str) -> BeforeTurnCtx:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, Literal
 import sqlite3
 import threading
 
@@ -41,21 +41,24 @@ class KVCacheDashboardReader:
         *,
         page: int = 1,
         page_size: int = 25,
+        source: Literal["agent"] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         if not self.db_path.exists():
             return [], 0
         safe_page = max(1, page)
         safe_size = max(1, min(page_size, 100))
         offset = (safe_page - 1) * safe_size
+        source_filter = "" if source is None else " AND source = 'agent'"
         with self._lock:
             with _connect(self.db_path) as db:
-                total_row = db.execute("""
+                total_row = db.execute(f"""
                     SELECT COUNT(*) AS total
                     FROM turns
                     WHERE react_cache_prompt_tokens IS NOT NULL
+                    {source_filter}
                     """).fetchone()
                 rows = db.execute(
-                    """
+                    f"""
                     SELECT
                         id,
                         ts,
@@ -66,6 +69,7 @@ class KVCacheDashboardReader:
                         react_cache_hit_tokens AS hit_tokens
                     FROM turns
                     WHERE react_cache_prompt_tokens IS NOT NULL
+                    {source_filter}
                     ORDER BY ts DESC, id DESC
                     LIMIT ? OFFSET ?
                     """,

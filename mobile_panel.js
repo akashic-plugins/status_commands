@@ -106,10 +106,11 @@ const dashboard = {
     Promise.all([
       context.request("kvcache.overview"),
       context.request("kvcache.turns", { page: 1, page_size: 50 }),
-    ]).then(([overview, page]) => {
+      context.request("kvcache.turns", { page: 1, page_size: 10, source: "agent" }),
+    ]).then(([overview, page, passivePage]) => {
       if (!active) return;
       const turns = Array.isArray(page.items) ? page.items : [];
-      const recent = turns.filter((turn) => turn?.source === "agent").slice(0, 10);
+      const recent = Array.isArray(passivePage.items) ? passivePage.items : [];
       const recentHit = recent.reduce((sum, turn) => sum + Number(turn.hit_tokens || 0), 0);
       const recentPrompt = recent.reduce((sum, turn) => sum + Number(turn.prompt_tokens || 0), 0);
       const recentRate = recentPrompt > 0 ? recentHit / recentPrompt : null;

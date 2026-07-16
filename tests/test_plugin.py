@@ -202,6 +202,95 @@ async def test_mobile_kvcache_rpc_reuses_dashboard_projection(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_mobile_kvcache_passive_page_filters_before_limit(tmp_path) -> None:
+    observe_dir = tmp_path / "observe"
+    observe_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(observe_dir / "observe.db")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE turns(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                source TEXT NOT NULL,
+                session_key TEXT NOT NULL,
+                user_msg TEXT,
+                react_cache_prompt_tokens INTEGER,
+                react_cache_hit_tokens INTEGER
+            )
+            """
+        )
+        agent_rows = [
+            (
+                f"2026-07-15T12:{minute:02d}:00+00:00",
+                "agent",
+                "mobile:passive",
+                f"被动 {minute}",
+                100,
+                50 + minute,
+            )
+            for minute in range(12)
+        ]
+        active_rows = [
+            (
+                f"2026-07-16T12:{minute % 60:02d}:{minute // 60:02d}+00:00",
+                "proactive" if minute % 2 == 0 else "drift",
+                "mobile:active",
+                f"主动 {minute}",
+                100,
+                80,
+            )
+            for minute in range(60)
+        ]
+        conn.executemany(
+            """
+            INSERT INTO turns(
+                ts, source, session_key, user_msg,
+                react_cache_prompt_tokens, react_cache_hit_tokens
+            ) VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            agent_rows + active_rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    plugin = StatusCommands()
+    plugin.context = SimpleNamespace(workspace=tmp_path)
+
+    global_page = await plugin.mobile_ui_call(
+        "kvcache.turns",
+        {"page": 1, "page_size": 50},
+        session_id=None,
+        turn_id=None,
+    )
+    passive_page = await plugin.mobile_ui_call(
+        "kvcache.turns",
+        {"page": 1, "page_size": 10, "source": "agent"},
+        session_id=None,
+        turn_id=None,
+    )
+    passive_page_two = await plugin.mobile_ui_call(
+        "kvcache.turns",
+        {"page": 2, "page_size": 10, "source": "agent"},
+        session_id=None,
+        turn_id=None,
+    )
+
+    assert all(item["source"] != "agent" for item in global_page["items"])
+    assert passive_page["total"] == 12
+    assert [item["user_preview"] for item in passive_page["items"]] == [
+        f"被动 {minute}" for minute in range(11, 1, -1)
+    ]
+    recent_prompt = sum(item["prompt_tokens"] for item in passive_page["items"])
+    recent_hit = sum(item["hit_tokens"] for item in passive_page["items"])
+    assert recent_hit / recent_prompt == pytest.approx(0.565)
+    assert [item["user_preview"] for item in passive_page_two["items"]] == [
+        "被动 1",
+        "被动 0",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_mobile_kvcache_rpc_rejects_invalid_pagination(tmp_path) -> None:
     plugin = StatusCommands()
     plugin.context = SimpleNamespace(workspace=tmp_path)
@@ -210,6 +299,13 @@ async def test_mobile_kvcache_rpc_rejects_invalid_pagination(tmp_path) -> None:
         await plugin.mobile_ui_call(
             "kvcache.turns",
             {"page_size": 0},
+            session_id=None,
+            turn_id=None,
+        )
+    with pytest.raises(ValueError, match="source"):
+        await plugin.mobile_ui_call(
+            "kvcache.turns",
+            {"source": "proactive"},
             session_id=None,
             turn_id=None,
         )
