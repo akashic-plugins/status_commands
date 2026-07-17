@@ -100,7 +100,7 @@ async def test_mobile_memory_status_reads_existing_session_only() -> None:
         def __init__(self) -> None:
             self.requested = []
 
-        def _load(self, key: str):
+        def get_existing(self, key: str):
             self.requested.append(key)
             return session
 
@@ -145,8 +145,8 @@ async def test_mobile_memory_status_rejects_missing_session() -> None:
 @pytest.mark.asyncio
 async def test_mobile_memory_status_does_not_recreate_deleted_session() -> None:
     class SessionManager:
-        def _load(self, key: str):
-            return None
+        def get_existing(self, key: str):
+            raise KeyError(key)
 
         def get_or_create(self, key: str):
             raise AssertionError(f"状态查询不得创建会话: {key}")
