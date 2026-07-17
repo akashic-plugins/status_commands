@@ -72,7 +72,7 @@ function memoryStatusPanel(host, context) {
 
   function requestStatus(onCurrent) {
     const generation = ++requestGeneration;
-    context.request("memory.status").then((status) => {
+    context.query("memory.status").then((status) => {
       if (!active || generation !== requestGeneration) return;
       onCurrent(status);
     }).catch((error) => {

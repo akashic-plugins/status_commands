@@ -9,7 +9,8 @@ from typing import Literal, TypedDict, cast
 from zoneinfo import ZoneInfo
 
 from agent.lifecycle.types import BeforeTurnCtx, TurnState
-from agent.plugins import Plugin
+from agent.plugins import MobileUiContribution, Plugin
+from agent.plugins.mobile_ui import MobileUiRpcInvalidRequest
 from agent.prompting import is_context_frame
 
 logger = logging.getLogger("plugin.status_commands")
@@ -156,15 +157,15 @@ class KVCacheCommandModule:
 
 class StatusCommands(Plugin):
     name = "status_commands"
-    version = "1.0.0"
+    version = "1.1.0"
 
     @classmethod
-    def mobile_ui_module(cls) -> str | None:
-        return "mobile_panel.js"
-
-    @classmethod
-    def mobile_ui_stylesheet(cls) -> str | None:
-        return "mobile_panel.css"
+    def mobile_ui(cls) -> MobileUiContribution:
+        return MobileUiContribution(
+            module="mobile_panel.js",
+            stylesheet="mobile_panel.css",
+            slots=("drawer.panel",),
+        )
 
     def telegram_bot_commands(self) -> list[tuple[str, str]]:
         return [
@@ -185,7 +186,7 @@ class StatusCommands(Plugin):
             ],
         )
 
-    async def mobile_ui_call(
+    def mobile_ui_query(
         self,
         method: str,
         payload: dict[str, object],
@@ -198,9 +199,9 @@ class StatusCommands(Plugin):
         # 1. 在插件 RPC 边界限定唯一的只读任务。
         _ = payload, turn_id
         if method != "memory.status":
-            raise ValueError(f"未知 status_commands 移动方法: {method}")
+            raise MobileUiRpcInvalidRequest(f"未知 status_commands 移动方法: {method}")
         if session_id is None or not session_id.strip():
-            raise ValueError("memory.status 缺少 session_id")
+            raise MobileUiRpcInvalidRequest("memory.status 缺少 session_id")
         session_manager = self.context.session_manager
         if session_manager is None:
             raise RuntimeError("memory.status 缺少 session 管理器")

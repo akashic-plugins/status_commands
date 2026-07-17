@@ -43,8 +43,11 @@ async def test_memory_status_command_aborts_turn() -> None:
 
 def test_status_commands_only_owns_memory_mobile_surface() -> None:
     assert StatusCommands.dashboard_module() is None
-    assert StatusCommands.mobile_ui_module() == "mobile_panel.js"
-    assert StatusCommands.mobile_ui_stylesheet() == "mobile_panel.css"
+    contribution = StatusCommands.mobile_ui()
+    assert contribution.module == "mobile_panel.js"
+    assert contribution.stylesheet == "mobile_panel.css"
+    assert contribution.navigation is None
+    assert contribution.slots == ("drawer.panel",)
 
 
 def test_memory_projection_is_shared_with_command_reply() -> None:
@@ -107,7 +110,7 @@ async def test_mobile_memory_status_reads_existing_session_only() -> None:
     manager = SessionManager()
     plugin = StatusCommands()
     plugin.context = SimpleNamespace(session_manager=manager)
-    result = await plugin.mobile_ui_call(
+    result = plugin.mobile_ui_query(
         "memory.status",
         {},
         session_id="mobile:existing",
@@ -123,7 +126,7 @@ async def test_mobile_memory_status_rejects_missing_session() -> None:
     plugin = StatusCommands()
     plugin.context = SimpleNamespace(session_manager=SimpleNamespace())
     with pytest.raises(ValueError, match="缺少 session_id"):
-        await plugin.mobile_ui_call(
+        plugin.mobile_ui_query(
             "memory.status",
             {},
             session_id=None,
@@ -131,7 +134,7 @@ async def test_mobile_memory_status_rejects_missing_session() -> None:
         )
 
     with pytest.raises(ValueError, match="未知 status_commands 移动方法"):
-        await plugin.mobile_ui_call(
+        plugin.mobile_ui_query(
             "kvcache.overview",
             {},
             session_id="mobile:existing",
@@ -150,7 +153,7 @@ async def test_mobile_memory_status_does_not_recreate_deleted_session() -> None:
 
     plugin = StatusCommands()
     plugin.context = SimpleNamespace(session_manager=SessionManager())
-    result = await plugin.mobile_ui_call(
+    result = plugin.mobile_ui_query(
         "memory.status",
         {},
         session_id="mobile:deleted",
@@ -181,7 +184,7 @@ async def test_mobile_memory_status_keeps_session_database_unchanged(tmp_path) -
 
         plugin = StatusCommands()
         plugin.context = SimpleNamespace(session_manager=manager)
-        result = await plugin.mobile_ui_call(
+        result = plugin.mobile_ui_query(
             "memory.status",
             {},
             session_id=session.key,

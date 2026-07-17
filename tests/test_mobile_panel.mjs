@@ -83,7 +83,7 @@ test("drawer stays empty when there is no current session", () => {
   const host = new PanelHost();
   let requested = false;
   panel.default.slots["drawer.panel"].mount(host, {
-    request() {
+    query() {
       requested = true;
       return Promise.resolve({});
     },
@@ -97,7 +97,7 @@ test("drawer projection follows the provided session context and stays collapsed
   const calls = [];
   panel.default.slots["drawer.panel"].mount(host, {
     sessionId: "mobile:one",
-    request(method, payload) {
+    query(method, payload) {
       calls.push({ method, payload });
       return Promise.resolve({
         state: "pending",
@@ -124,7 +124,7 @@ test("detail leaves the accessibility tree while collapsed", async () => {
   const host = new PanelHost();
   panel.default.slots["drawer.panel"].mount(host, {
     sessionId: "mobile:two",
-    request() {
+    query() {
       return Promise.resolve({
         state: "up_to_date",
         summary: "已整理到最新",
@@ -168,7 +168,7 @@ test("opening the same session refreshes the projection in place", async () => {
   let requests = 0;
   panel.default.slots["drawer.panel"].mount(host, {
     sessionId: "mobile:same",
-    request() {
+    query() {
       const response = responses[requests];
       requests += 1;
       return Promise.resolve(response);
@@ -191,7 +191,7 @@ test("a late refresh cannot overwrite a newer request generation", async () => {
   const pending = [];
   panel.default.slots["drawer.panel"].mount(host, {
     sessionId: "mobile:same",
-    request() {
+    query() {
       return new Promise((resolve) => pending.push(resolve));
     },
   });
@@ -232,7 +232,7 @@ test("unavailable session is neutral and cannot expand", async () => {
   const host = new PanelHost();
   panel.default.slots["drawer.panel"].mount(host, {
     sessionId: "mobile:deleted",
-    request() {
+    query() {
       return Promise.resolve({
         state: "unavailable",
         summary: "电脑端已不存在",
