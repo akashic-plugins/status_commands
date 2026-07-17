@@ -30,7 +30,7 @@
 
 格式化为可读文本后作为 abort_reply 返回。只统计"真实用户消息"（role=user 且非 context frame 占位符）。
 
-同一份结构化 projection 也用于 Android 抽屉面板。移动 RPC 只调用 `session_manager.get_existing()`，失效会话返回中性的 `unavailable` 投影，不会因为状态查询而重新创建。面板默认折叠，只显示摘要和待整理数；每次展开都会重新读取同一会话，展开后显示最新的消息计数和最后已整理预览。
+同一份结构化 projection 也用于 Android 抽屉面板。移动 RPC 通过 SessionManager 的只读加载路径读取既有会话，兼容尚未提供 `get_existing()` 的 runtime；失效会话返回中性的 `unavailable` 投影，不会因为状态查询而重新创建。面板默认折叠，只显示摘要和待整理数；每次展开都会重新读取同一会话，展开后显示最新的消息计数和最后已整理预览。
 
 测试需要把 Agent 主仓加入导入路径：
 

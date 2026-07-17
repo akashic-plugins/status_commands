@@ -205,10 +205,9 @@ class StatusCommands(Plugin):
         if session_manager is None:
             raise RuntimeError("memory.status 缺少 session 管理器")
 
-        # 2. 只读取已存在会话，禁止状态查询重建失效身份。
-        try:
-            session = session_manager.get_existing(session_id)
-        except KeyError:
+        # 2. 旧版 runtime 尚无 get_existing，直接走同一只读加载路径。
+        session = session_manager._load(session_id)
+        if session is None:
             return cast("dict[str, object]", _unavailable_memory_status_projection())
         projection = _build_memory_status_projection(
             list(session.messages),
