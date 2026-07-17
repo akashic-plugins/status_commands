@@ -5,7 +5,7 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, TypedDict, cast
 from zoneinfo import ZoneInfo
 
 from agent.lifecycle.types import BeforeTurnCtx, TurnState
@@ -18,6 +18,14 @@ _SESSION_SLOT = "session:session"
 _CTX_SLOT = "session:ctx"
 _TS_PATTERN = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})")
 _BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+
+
+class MemoryStatusProjection(TypedDict):
+    state: Literal["never", "pending", "up_to_date", "unavailable"]
+    summary: str
+    pending_user_messages: int
+    message_count: int
+    last_consolidated_preview: str | None
 
 
 class MemoryStatusCommandModule:
@@ -42,9 +50,10 @@ class MemoryStatusCommandModule:
         session = state.session
         if session is None:
             return frame
-        messages = list(getattr(session, "messages", []))
-        last = max(0, int(getattr(session, "last_consolidated", 0)))
-        last = min(last, len(messages))
+        projection = _build_memory_status_projection(
+            list(getattr(session, "messages", [])),
+            int(getattr(session, "last_consolidated", 0)),
+        )
         logger.info(
             "[%s:%s] 命中命令: %s",
             self._plugin_name,
@@ -52,7 +61,7 @@ class MemoryStatusCommandModule:
             command,
         )
         frame.slots[_CTX_SLOT] = _abort_ctx(
-            state, _format_memory_status_reply(messages, last)
+            state, _format_memory_status_reply(projection)
         )
         return frame
 
@@ -149,6 +158,14 @@ class StatusCommands(Plugin):
     name = "status_commands"
     version = "1.0.0"
 
+    @classmethod
+    def mobile_ui_module(cls) -> str | None:
+        return "mobile_panel.js"
+
+    @classmethod
+    def mobile_ui_stylesheet(cls) -> str | None:
+        return "mobile_panel.css"
+
     def telegram_bot_commands(self) -> list[tuple[str, str]]:
         return [
             ("memorystatus", "查看记忆整理状态"),
@@ -167,6 +184,38 @@ class StatusCommands(Plugin):
                 KVCacheCommandModule(plugin_name, db_path),
             ],
         )
+
+    async def mobile_ui_call(
+        self,
+        method: str,
+        payload: dict[str, object],
+        *,
+        session_id: str | None,
+        turn_id: str | None,
+    ) -> dict[str, object]:
+        """返回当前既有会话的记忆整理投影。"""
+
+        # 1. 在插件 RPC 边界限定唯一的只读任务。
+        _ = payload, turn_id
+        if method != "memory.status":
+            raise ValueError(f"未知 status_commands 移动方法: {method}")
+        if session_id is None or not session_id.strip():
+            raise ValueError("memory.status 缺少 session_id")
+        session_manager = self.context.session_manager
+        if session_manager is None:
+            raise RuntimeError("memory.status 缺少 session 管理器")
+
+        # 2. 只读取已存在会话，禁止状态查询重建失效身份。
+        try:
+            session = session_manager.get_existing(session_id)
+        except KeyError:
+            return cast("dict[str, object]", _unavailable_memory_status_projection())
+        projection = _build_memory_status_projection(
+            list(session.messages),
+            int(session.last_consolidated),
+        )
+        return cast("dict[str, object]", projection)
+
 
 def _normalize_command(content: str) -> str:
     parts = (content or "").strip().split(maxsplit=1)
@@ -208,26 +257,70 @@ def _format_ts(ts: str) -> str:
     return ts
 
 
-def _format_memory_status_reply(messages: list[dict], last_consolidated: int) -> str:
-    consolidated_user = _count_real_user_messages(messages[:last_consolidated])
+def _build_memory_status_projection(
+    messages: list[dict],
+    last_consolidated: int,
+) -> MemoryStatusProjection:
+    """把会话整理游标投影为命令与移动端共用的稳定状态。"""
+
+    # 1. 把持久化游标限制到当前会话窗口。
+    last = max(0, min(int(last_consolidated), len(messages)))
+    consolidated_user = _count_real_user_messages(messages[:last])
     total_user = _count_real_user_messages(messages)
     pending_user = max(0, total_user - consolidated_user)
-    last_user_message = _latest_real_user_content(messages[:last_consolidated])
+    last_user_message = _latest_real_user_content(messages[:last])
+
+    # 2. 状态摘要只描述用户现在需要知道的整理进度。
+    if last <= 0 or not last_user_message:
+        state: Literal["never", "pending", "up_to_date"] = "never"
+        summary = "还没有完成过整理"
+    elif pending_user == 0:
+        state = "up_to_date"
+        summary = "已整理到最新"
+    else:
+        state = "pending"
+        summary = f"有 {pending_user} 条消息待整理"
+    return {
+        "state": state,
+        "summary": summary,
+        "pending_user_messages": pending_user,
+        "message_count": len(messages),
+        "last_consolidated_preview": (
+            _preview_text(last_user_message) if last_user_message else None
+        ),
+    }
+
+
+def _unavailable_memory_status_projection() -> MemoryStatusProjection:
+    return {
+        "state": "unavailable",
+        "summary": "电脑端已不存在",
+        "pending_user_messages": 0,
+        "message_count": 0,
+        "last_consolidated_preview": None,
+    }
+
+
+def _format_memory_status_reply(projection: MemoryStatusProjection) -> str:
+    """把结构化记忆状态渲染为命令回复。"""
 
     lines = ["🧠 记忆整理状态："]
-    if last_consolidated <= 0 or not last_user_message:
+    if projection["state"] == "never":
         lines.append("当前会话还没有完成过记忆整理。")
-    elif pending_user == 0:
+    elif projection["state"] == "up_to_date":
         lines.append("当前会话已经整理到最新的用户消息。")
     else:
-        lines.append(f"上次整理到 {pending_user} 条用户消息之前。")
-    if last_user_message:
-        lines.extend(["", "最后已整理的用户消息：", f"“{_preview_text(last_user_message)}”"])
+        lines.append(
+            f"上次整理到 {projection['pending_user_messages']} 条用户消息之前。"
+        )
+    preview = projection["last_consolidated_preview"]
+    if preview:
+        lines.extend(["", "最后已整理的用户消息：", f"“{preview}”"])
     lines.extend(
         [
             "",
-            f"尚未整理的用户消息数：{pending_user}",
-            f"当前会话消息数：{len(messages)}",
+            f"尚未整理的用户消息数：{projection['pending_user_messages']}",
+            f"当前会话消息数：{projection['message_count']}",
         ]
     )
     return "\n".join(lines)

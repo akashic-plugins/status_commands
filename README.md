@@ -2,7 +2,7 @@
 
 内置诊断命令拦截器。在 BeforeTurn 管道的早期阶段识别 `/memory_status` 和 `/kvcache` 命令，直接返回诊断报告，绕过后续的记忆检索和 LLM 推理。
 
-本插件不注册 Dashboard 或移动端界面。KV Cache 的采集、看板与 Turn 尾部统计由数据所有者 `observe` 插件提供；`/kvcache` 仅保留为命令行式只读入口。
+本插件不注册 Dashboard。它只在 Android 会话抽屉提供当前会话的记忆整理状态；KV Cache 的采集、看板与 Turn 尾部统计仍由数据所有者 `observe` 插件提供，`/kvcache` 仅保留为命令行式只读入口。
 
 ---
 
@@ -11,6 +11,7 @@
 | 接入方式 | 阶段 |
 |---|---|
 | `before_turn_modules()` | `before_turn.acquire_session` 之后——命令识别与 abort |
+| `mobile_ui_module()` | `drawer.panel`——当前既有会话的只读记忆整理状态 |
 
 ---
 
@@ -28,6 +29,16 @@
 - 当前会话总消息数。
 
 格式化为可读文本后作为 abort_reply 返回。只统计"真实用户消息"（role=user 且非 context frame 占位符）。
+
+同一份结构化 projection 也用于 Android 抽屉面板。移动 RPC 只调用 `session_manager.get_existing()`，失效会话返回中性的 `unavailable` 投影，不会因为状态查询而重新创建。面板默认折叠，只显示摘要和待整理数；每次展开都会重新读取同一会话，展开后显示最新的消息计数和最后已整理预览。
+
+测试需要把 Agent 主仓加入导入路径：
+
+```bash
+PYTHONPATH=/path/to/akasic-agent AKASHIC_AGENT_ROOT=/path/to/akasic-agent pytest -q
+node --test tests/test_mobile_panel.mjs
+PYTHONPATH=/path/to/akasic-agent pyright plugin.py
+```
 
 ### KVCacheCommandModule（`/kvcache` / `/cache_status`）
 
