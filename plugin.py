@@ -156,6 +156,7 @@ class KVCacheCommandModule:
 
 
 class StatusCommands(Plugin):
+    api_version = 2
     name = "status_commands"
     version = "1.1.0"
 
