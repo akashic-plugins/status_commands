@@ -1,4 +1,4 @@
-name: plugin-api-v2
+name: plugin-api
 
 on:
   pull_request:
@@ -17,12 +17,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: akashic-plugins/plugin-contracts
-          ref: 24543445c7b99ca63fcd90b5828f754a148b184c
+          ref: 4dd69dd621e029e51e99aa428443fa3a4ec1f6cf
           path: .plugin-contracts
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Check Plugin API v2
+      - name: Check Plugin API v2/v3
         env:
           PYTHONPATH: .plugin-contracts
         run: python -m akashic_plugin_contracts check plugin.py

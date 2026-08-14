@@ -1,8 +1,10 @@
 # status_commands 插件
 
-内置诊断命令拦截器。在 BeforeTurn 管道的早期阶段识别 `/memory_status` 和 `/kvcache` 命令，直接返回诊断报告，绕过后续的记忆检索和 LLM 推理。
+记忆整理状态插件。API v3 入口通过 `core.commands` 声明 `/memorystatus`，通过 `core.session_read` 读取脱离的既有 Session 快照，并通过 `core.ui_slots` 发布 Android 会话抽屉面板。
 
-本插件不注册 Dashboard。它只在 Android 会话抽屉提供当前会话的记忆整理状态；KV Cache 的采集、看板与 Turn 尾部统计仍由数据所有者 `observe` 插件提供，`/kvcache` 仅保留为命令行式只读入口。
+本插件不注册 Dashboard，也不再声明 `/kvcache`。KV Cache 的采集、查询、看板与 Turn 尾部统计都由数据所有者 `observe` 插件负责。
+
+> 迁移说明：源码暂时保留 API v2 class 作为行为等价对照；模块级 `api_version = 3` 是当前候选 runtime 的唯一入口，下一张清理 PR 会删除旧实现。
 
 ---
 
@@ -10,16 +12,17 @@
 
 | 接入方式 | 阶段 |
 |---|---|
-| `before_turn_modules()` | `before_turn.acquire_session` 之后——命令识别与 abort |
-| `mobile_ui_module()` | `drawer.panel`——当前既有会话的只读记忆整理状态 |
+| `core.commands` | 命令识别后直接返回插件结果，不创建 Session、不进入 LLM |
+| `core.session_read` | 读取既有 Session 的脱离快照，不取得持久化 owner |
+| `core.ui_slots` | `drawer.panel`——当前既有会话的只读记忆整理状态 |
 
 ---
 
 ## 运作逻辑
 
-两个命令各对应一个 PhaseModule，均插入在记忆检索（`_PrepareContextModule`）之前。任意一个命中时，向 `session:ctx` slot 写入一个 `abort=True` 的 `BeforeTurnCtx`，后续管道模块及 LLM 推理全部跳过，直接返回该 slot 的内容作为本轮回复。
+插件 Fiber 在 `apply(ctx, config)` 中登记命令与 Mobile UI Effect。Core 冻结 generation 后才发布命令目录、执行 handler 和查询界面；候选失败或 generation 退役时，Root 负责精确清理登记。
 
-### MemoryStatusCommandModule（`/memory_status` / `/compact_status`）
+### 记忆状态（`/memorystatus` / `/memory_status` / `/compact_status`）
 
 读取当前 session 的 `messages` 列表和 `last_consolidated` 指针，统计：
 
@@ -30,7 +33,7 @@
 
 格式化为可读文本后作为 abort_reply 返回。只统计"真实用户消息"（role=user 且非 context frame 占位符）。
 
-同一份结构化 projection 也用于 Android 抽屉面板。移动 RPC 只通过 SessionManager 的公开 `get_existing()` 接口读取既有会话；插件要求 runtime 提供该接口，不再回退到私有加载方法。会话不存在时返回中性的 `unavailable` 投影，不会因为状态查询而重新创建。面板默认折叠，只显示摘要和待整理数；每次展开都会重新读取同一会话，展开后显示最新的消息计数和最后已整理预览。
+同一份结构化 projection 也用于 Android 抽屉面板。命令和移动查询都只通过 `core.session_read` 读取快照；会话不存在时返回中性的 `unavailable` 投影，不会因为状态查询而重新创建。面板默认折叠，只显示摘要和待整理数；每次展开都会重新读取同一会话，展开后显示最新的消息计数和最后已整理预览。
 
 测试需要把 Agent 主仓加入导入路径：
 
@@ -39,12 +42,3 @@ PYTHONPATH=/path/to/akasic-agent AKASHIC_AGENT_ROOT=/path/to/akasic-agent pytest
 node --test tests/test_mobile_panel.mjs
 PYTHONPATH=/path/to/akasic-agent pyright plugin.py
 ```
-
-### KVCacheCommandModule（`/kvcache` / `/cache_status`）
-
-查询 observe 数据库（`observe/observe.db`），从 `turns` 表取最近 N 轮（默认 5，可追加参数覆盖，最大 30）的 KVCache 统计字段：
-
-- `react_cache_prompt_tokens`：本轮送入的 prompt tokens 总量。
-- `react_cache_hit_tokens`：命中缓存的 tokens 数量。
-
-计算每轮命中率和总体命中率，格式化为表格后返回。若 observe 数据库不存在则返回提示信息。
