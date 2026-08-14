@@ -4,8 +4,6 @@
 
 本插件不注册 Dashboard，也不再声明 `/kvcache`。KV Cache 的采集、查询、看板与 Turn 尾部统计都由数据所有者 `observe` 插件负责。
 
-> 迁移说明：源码暂时保留 API v2 class 作为行为等价对照；模块级 `api_version = 3` 是当前候选 runtime 的唯一入口，下一张清理 PR 会删除旧实现。
-
 ---
 
 ## 接入点

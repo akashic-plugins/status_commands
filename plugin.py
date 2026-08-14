@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 import logging
-import re
-import sqlite3
 from collections.abc import Mapping, Sequence
-from datetime import datetime
-from pathlib import Path
 from typing import Literal, TypedDict, cast
-from zoneinfo import ZoneInfo
 
 from agent.plugin_composition import (
     COMMANDS,
@@ -21,16 +16,9 @@ from agent.plugin_composition import (
     MobileUiRpcInvalidRequest,
     SessionReadService,
 )
-from agent.lifecycle.types import BeforeTurnCtx, TurnState
-from agent.plugins import MobileUiContribution, Plugin
 from agent.prompting import is_context_frame
 
 logger = logging.getLogger("plugin.status_commands")
-
-_SESSION_SLOT = "session:session"
-_CTX_SLOT = "session:ctx"
-_TS_PATTERN = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})")
-_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 api_version = 3
 name = "status_commands"
@@ -132,236 +120,6 @@ def _mobile_memory_status_query(
     return dict(_read_memory_status(session_read, session_id))
 
 
-class MemoryStatusCommandModule:
-    slot = "status_commands.memory_status"
-    requires = ("before_turn.acquire_session", _SESSION_SLOT)
-    produces = (_CTX_SLOT,)
-
-    def __init__(self, plugin_name: str) -> None:
-        self._plugin_name = plugin_name
-
-    async def run(self, frame) -> object:
-        if _CTX_SLOT in frame.slots:
-            return frame
-        state = frame.input
-        command = _normalize_command(state.msg.content)
-        if command not in {
-            "/memorystatus",
-            "/memory_status",
-            "/compact_status",
-        }:
-            return frame
-        session = state.session
-        if session is None:
-            return frame
-        projection = _build_memory_status_projection(
-            list(getattr(session, "messages", [])),
-            int(getattr(session, "last_consolidated", 0)),
-        )
-        logger.info(
-            "[%s:%s] 命中命令: %s",
-            self._plugin_name,
-            self.__class__.__name__,
-            command,
-        )
-        frame.slots[_CTX_SLOT] = _abort_ctx(
-            state, _format_memory_status_reply(projection)
-        )
-        return frame
-
-
-class KVCacheCommandModule:
-    slot = "status_commands.kvcache"
-    requires = ("before_turn.acquire_session", _SESSION_SLOT)
-    produces = (_CTX_SLOT,)
-
-    def __init__(self, plugin_name: str, db_path: Path | None) -> None:
-        self._plugin_name = plugin_name
-        self._db_path = db_path
-
-    async def run(self, frame) -> object:
-        if _CTX_SLOT in frame.slots:
-            return frame
-        state = frame.input
-        command = _normalize_command(state.msg.content)
-        if command not in {"/kvcache", "/cache_status"}:
-            return frame
-        logger.info(
-            "[%s:%s] 命中命令: %s",
-            self._plugin_name,
-            self.__class__.__name__,
-            command,
-        )
-        reply = self._build_reply(state)
-        frame.slots[_CTX_SLOT] = _abort_ctx(state, reply)
-        return frame
-
-    def _build_reply(self, state: TurnState) -> str:
-        db_path = self._db_path
-        if not db_path or not db_path.exists():
-            return "暂无 KVCache 数据（observe 数据库不存在）。"
-
-        args = (state.msg.content or "").strip().split()
-        limit = 5
-        if len(args) > 1:
-            try:
-                limit = max(1, min(30, int(args[1])))
-            except ValueError:
-                pass
-
-        try:
-            conn = sqlite3.connect(str(db_path))
-            try:
-                cursor = conn.execute(
-                    """SELECT llm_output, ts, react_cache_prompt_tokens, react_cache_hit_tokens
-                       FROM turns
-                       WHERE session_key=? AND react_cache_prompt_tokens IS NOT NULL
-                       ORDER BY id DESC LIMIT ?""",
-                    [state.session_key, limit],
-                )
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
-        except Exception:
-            logger.exception("KVCache 查询失败")
-            return "KVCache 查询失败。"
-
-        if not rows:
-            return "暂无 KVCache 数据。"
-
-        overall_prompt = sum(r[2] or 0 for r in rows)
-        overall_hit = sum(r[3] or 0 for r in rows)
-        overall_pct = (overall_hit / overall_prompt * 100) if overall_prompt > 0 else 0.0
-
-        lines = [
-            f"⚡ KVCache · 最近 {len(rows)} 轮",
-            "",
-            f"命中率  {overall_pct:.1f}%  {_pct_bar(overall_pct)}",
-            f"Token  {overall_hit:,} / {overall_prompt:,}",
-        ]
-        for row in rows:
-            llm_output, ts, prompt_tokens, hit_tokens = row
-            content = _content_to_text(llm_output or "")
-            if is_context_frame(content):
-                content = ""
-            preview = _preview_text(content, limit=72)
-            hit = hit_tokens or 0
-            prompt = prompt_tokens or 0
-            pct = (hit / prompt * 100) if prompt > 0 else 0.0
-            lines.extend(["", ""])
-            lines.append(
-                f"{_format_ts(ts)}   {_pct_emoji(pct)} {pct:.1f}%  {_pct_bar(pct)}"
-            )
-            lines.append(f"    {hit:,} / {prompt:,} tokens")
-            if preview:
-                lines.append(f"    {preview}")
-        return "\n".join(lines)
-
-
-class StatusCommands(Plugin):
-    api_version = 2
-    name = "status_commands"
-    version = "1.1.0"
-
-    @classmethod
-    def mobile_ui(cls) -> MobileUiContribution:
-        return MobileUiContribution(
-            module="mobile_panel.js",
-            stylesheet="mobile_panel.css",
-            slots=("drawer.panel",),
-        )
-
-    def telegram_bot_commands(self) -> list[tuple[str, str]]:
-        return [
-            ("memorystatus", "查看记忆整理状态"),
-            ("kvcache", "查看 KVCache 状态"),
-        ]
-
-    def before_turn_modules(self) -> list[object]:
-        plugin_name = self.name or "status_commands"
-        db_path = None
-        if self.context.workspace is not None:
-            db_path = self.context.workspace / "observe" / "observe.db"
-        return cast(
-            "list[object]",
-            [
-                MemoryStatusCommandModule(plugin_name),
-                KVCacheCommandModule(plugin_name, db_path),
-            ],
-        )
-
-    def mobile_ui_query(
-        self,
-        method: str,
-        payload: dict[str, object],
-        *,
-        session_id: str | None,
-        turn_id: str | None,
-    ) -> dict[str, object]:
-        """返回当前既有会话的记忆整理投影。"""
-
-        # 1. 在插件 RPC 边界限定唯一的只读任务。
-        _ = payload, turn_id
-        if method != "memory.status":
-            raise MobileUiRpcInvalidRequest(f"未知 status_commands 移动方法: {method}")
-        if session_id is None or not session_id.strip():
-            raise MobileUiRpcInvalidRequest("memory.status 缺少 session_id")
-        session_manager = self.context.session_manager
-        if session_manager is None:
-            raise RuntimeError("memory.status 缺少 session 管理器")
-
-        # 2. 通过公开只读边界查询，不创建已删除会话。
-        try:
-            session = session_manager.get_existing(session_id)
-        except KeyError:
-            return dict(_unavailable_memory_status_projection())
-        projection = _build_memory_status_projection(
-            list(session.messages),
-            int(session.last_consolidated),
-        )
-        return dict(projection)
-
-
-def _normalize_command(content: str) -> str:
-    parts = (content or "").strip().split(maxsplit=1)
-    if not parts:
-        return ""
-    head = parts[0].lower()
-    if "@" in head:
-        head = head.split("@", 1)[0]
-    return head
-
-
-def _abort_ctx(state: TurnState, reply: str) -> BeforeTurnCtx:
-    return BeforeTurnCtx(
-        session_key=state.session_key,
-        channel=state.msg.channel,
-        chat_id=state.msg.chat_id,
-        content=state.msg.content,
-        timestamp=state.msg.timestamp,
-        skill_names=[],
-        retrieved_memory_block="",
-        retrieval_trace_raw=None,
-        history_messages=(),
-        abort=True,
-        abort_reply=reply,
-    )
-
-
-def _format_ts(ts: str) -> str:
-    try:
-        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(_BEIJING_TZ)
-        return f"{parsed.month}-{parsed.day} {parsed.hour:02d}:{parsed.minute:02d}"
-    except ValueError:
-        pass
-    m = _TS_PATTERN.search(ts)
-    if m:
-        return f"{int(m.group(2))}-{int(m.group(3))} {m.group(4)}:{m.group(5)}"
-    return ts
-
-
 def _build_memory_status_projection(
     messages: Sequence[Mapping[str, object]],
     last_consolidated: int,
@@ -455,10 +213,14 @@ def _content_to_text(content: object) -> str:
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, list):
+        raw_items = cast(list[object], content)
         parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(str(item.get("text", "")).strip())
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            mapping = cast(dict[object, object], item)
+            if mapping.get("type") == "text":
+                parts.append(str(mapping.get("text", "")).strip())
         return "\n".join(part for part in parts if part).strip()
     return str(content).strip()
 
@@ -468,17 +230,3 @@ def _preview_text(text: str, limit: int = 80) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 1] + "…"
-
-
-def _pct_bar(pct: float, width: int = 10) -> str:
-    filled = round(pct / 100 * width)
-    filled = max(0, min(width, filled))
-    return "█" * filled + "░" * (width - filled)
-
-
-def _pct_emoji(pct: float) -> str:
-    if pct >= 80:
-        return "🟢"
-    if pct >= 40:
-        return "🟡"
-    return "🔴"
