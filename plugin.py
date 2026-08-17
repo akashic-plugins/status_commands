@@ -95,7 +95,7 @@ def _read_memory_status(
         return _unavailable_memory_status_projection()
     return _build_memory_status_projection(
         snapshot.messages,
-        snapshot.last_consolidated,
+        snapshot.consolidated_through_seq,
     )
 
 
@@ -122,19 +122,23 @@ def _mobile_memory_status_query(
 
 def _build_memory_status_projection(
     messages: Sequence[Mapping[str, object]],
-    last_consolidated: int,
+    consolidated_through_seq: int | None,
 ) -> MemoryStatusProjection:
-    """把会话整理游标投影为命令与移动端共用的稳定状态。"""
+    """把 active compaction 边界投影为命令与移动端共用状态。"""
 
-    # 1. 把持久化游标限制到当前会话窗口。
-    last = max(0, min(int(last_consolidated), len(messages)))
-    consolidated_user = _count_real_user_messages(messages[:last])
+    # 1. generation 与消息下标无关，只按 ledger 的 canonical seq 边界判断。
+    consolidated_messages = tuple(
+        item
+        for item in messages
+        if _is_consolidated_message(item, consolidated_through_seq)
+    )
+    consolidated_user = _count_real_user_messages(consolidated_messages)
     total_user = _count_real_user_messages(messages)
     pending_user = max(0, total_user - consolidated_user)
-    last_user_message = _latest_real_user_content(messages[:last])
+    last_user_message = _latest_real_user_content(consolidated_messages)
 
     # 2. 状态摘要只描述用户现在需要知道的整理进度。
-    if last <= 0 or not last_user_message:
+    if consolidated_through_seq is None or not last_user_message:
         state: Literal["never", "pending", "up_to_date"] = "never"
         summary = "还没有完成过整理"
     elif pending_user == 0:
@@ -152,6 +156,20 @@ def _build_memory_status_projection(
             _preview_text(last_user_message) if last_user_message else None
         ),
     }
+
+
+def _is_consolidated_message(
+    item: Mapping[str, object],
+    consolidated_through_seq: int | None,
+) -> bool:
+    if consolidated_through_seq is None:
+        return False
+    seq = item.get("seq")
+    return (
+        isinstance(seq, int)
+        and not isinstance(seq, bool)
+        and seq <= consolidated_through_seq
+    )
 
 
 def _unavailable_memory_status_projection() -> MemoryStatusProjection:

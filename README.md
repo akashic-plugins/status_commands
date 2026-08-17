@@ -22,14 +22,19 @@
 
 ### 记忆状态（`/memorystatus` / `/memory_status` / `/compact_status`）
 
-读取当前 session 的 `messages` 列表和 `last_consolidated` 指针，统计：
+读取当前 Session 的消息快照与 active compaction 的
+`consolidated_through_seq`，统计：
 
-- 已整理到的用户消息数量（`last_consolidated` 之前）。
+- canonical `seq` 不大于 active compaction 边界的用户消息数量。
 - 尚未整理的用户消息数量。
 - 最后一条已整理用户消息的预览。
 - 当前会话总消息数。
 
 格式化为可读文本后作为 abort_reply 返回。只统计"真实用户消息"（role=user 且非 context frame 占位符）。
+
+`last_consolidated` 在当前 Core 中是 compaction generation，不是消息数组下标；
+本插件不会用它切片消息。尚无 active compaction 时状态为 `never`，所有真实用户消息
+都计为尚未整理。
 
 同一份结构化 projection 也用于 Android 抽屉面板。命令和移动查询都只通过 `core.session_read` 读取快照；会话不存在时返回中性的 `unavailable` 投影，不会因为状态查询而重新创建。面板默认折叠，只显示摘要和待整理数；每次展开都会重新读取同一会话，展开后显示最新的消息计数和最后已整理预览。
 
@@ -38,5 +43,5 @@
 ```bash
 PYTHONPATH=/path/to/akasic-agent AKASHIC_AGENT_ROOT=/path/to/akasic-agent pytest -q
 node --test tests/test_mobile_panel.mjs
-PYTHONPATH=/path/to/akasic-agent pyright plugin.py
+PYTHONPATH=/path/to/akasic-agent pyright --level error plugin.py
 ```

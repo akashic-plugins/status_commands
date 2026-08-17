@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from pathlib import Path
 from typing import cast
 
@@ -18,6 +19,10 @@ from agent.plugin_composition import (
     PluginUiSlots,
     SessionReadService,
 )
+from agent.plugins.manager import PluginManager
+from agent.plugins.mobile_ui import PluginMobileUiProvider
+from agent.plugins.static_manifest import load_static_plugin_manifest
+from bus.event_bus import EventBus
 from session.manager import SessionManager
 
 import status_commands_source.plugin as plugin_module
@@ -38,24 +43,31 @@ class _SessionFixture:
         self.last_consolidated = last_consolidated
 
 
+class _CompactionFixture:
+    generation = 1
+    consolidated_through_seq = 2
+
+
 @pytest.mark.asyncio
 async def test_v3_apply_registers_memory_only_command_and_mobile_ui(
     tmp_path: Path,
 ) -> None:
     session = _SessionFixture(
         messages=[
-            {"role": "user", "content": "已整理的问题"},
-            {"role": "assistant", "content": "旧回答"},
-            {"role": "user", "content": "待整理的问题"},
+            {"seq": 1, "role": "user", "content": "已整理的问题"},
+            {"seq": 2, "role": "assistant", "content": "旧回答"},
+            {"seq": 3, "role": "user", "content": "待整理的问题"},
         ],
-        last_consolidated=2,
+        last_consolidated=1,
     )
     requested: list[str] = []
 
-    def get_existing(session_key: str) -> _SessionFixture:
+    def get_existing(
+        session_key: str,
+    ) -> tuple[_SessionFixture, _CompactionFixture]:
         requested.append(session_key)
         if session_key == "mobile:existing":
-            return session
+            return session, _CompactionFixture()
         raise KeyError(session_key)
 
     root = CompositionRoot("status-commands-v3")
@@ -99,8 +111,8 @@ async def test_v3_apply_registers_memory_only_command_and_mobile_ui(
     assert execution is not None
     assert execution.result == CommandResult(
         "success",
-        _format_memory_status_reply(
-            _build_memory_status_projection(session.messages, 2)
+            _format_memory_status_reply(
+                _build_memory_status_projection(session.messages, 2)
         ),
     )
     assert (
@@ -115,10 +127,9 @@ async def test_v3_apply_registers_memory_only_command_and_mobile_ui(
     )
 
     contribution = ui_slots.freeze()["status_commands"]
-    assert contribution.mobile_ui_asset is not None
-    assert contribution.mobile_ui_asset.slots == ("drawer.panel",)
-    query = contribution.mobile_ui_query
-    assert query is not None
+    assert contribution.asset is not None
+    assert contribution.descriptor.slots == ("drawer.panel",)
+    query = contribution.query
     mobile_result = cast(
         dict[str, object],
         query(
@@ -182,10 +193,10 @@ async def test_v3_apply_registers_memory_only_command_and_mobile_ui(
 def test_memory_projection_is_shared_with_command_reply() -> None:
     projection = _build_memory_status_projection(
         [
-            {"role": "user", "content": "已整理的问题"},
-            {"role": "assistant", "content": "旧回答"},
-            {"role": "user", "content": "待整理的问题"},
-            {"role": "assistant", "content": "新回答"},
+            {"seq": 1, "role": "user", "content": "已整理的问题"},
+            {"seq": 2, "role": "assistant", "content": "旧回答"},
+            {"seq": 3, "role": "user", "content": "待整理的问题"},
+            {"seq": 4, "role": "assistant", "content": "新回答"},
         ],
         2,
     )
@@ -204,15 +215,24 @@ def test_memory_projection_is_shared_with_command_reply() -> None:
 def test_memory_projection_ignores_context_frames() -> None:
     projection = _build_memory_status_projection(
         [
-            {"role": "user", "content": "[Context Frame]\ninternal"},
-            {"role": "user", "content": "真实问题"},
-            {"role": "assistant", "content": "回答"},
+            {"seq": 1, "role": "user", "content": "[Context Frame]\ninternal"},
+            {"seq": 2, "role": "user", "content": "真实问题"},
+            {"seq": 3, "role": "assistant", "content": "回答"},
         ],
-        99,
+        3,
     )
     assert projection["state"] == "up_to_date"
     assert projection["pending_user_messages"] == 0
     assert projection["last_consolidated_preview"] == "真实问题"
+
+
+def test_static_manifest_matches_v3_module() -> None:
+    manifest = load_static_plugin_manifest(Path(plugin_module.__file__ or "").resolve().parent)
+
+    assert manifest.name == plugin_module.name == "status_commands"
+    assert manifest.version == plugin_module.version == "2.0.0"
+    assert manifest.api_version == plugin_module.api_version == 3
+    assert manifest.entrypoint == "plugin.py"
 
 
 def test_mobile_memory_status_keeps_session_database_unchanged(
@@ -230,7 +250,12 @@ def test_mobile_memory_status_keeps_session_database_unchanged(
         before = _session_database_snapshot(tmp_path)
 
         result = _mobile_memory_status_query(
-            SessionReadService(manager.get_existing),
+            SessionReadService(
+                lambda key: (
+                    manager.get_existing(key),
+                    manager.control_store.get_active_compaction(key),
+                )
+            ),
             "memory.status",
             {},
             session_id=session.key,
@@ -255,3 +280,97 @@ def _session_database_snapshot(
         for path in workspace.glob("sessions.db*")
         if path.is_file()
     }
+
+
+@pytest.mark.asyncio
+async def test_real_manager_publishes_committed_command_and_mobile_query(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("mobile:existing")
+    session.messages = [
+        {"role": "user", "content": "已整理的问题"},
+        {"role": "assistant", "content": "旧回答"},
+        {"role": "user", "content": "待整理的问题"},
+    ]
+    sessions.save(session)
+    sessions.invalidate(session.key)
+    persisted = sessions.get_existing(session.key)
+    source = persisted.messages[:2]
+    sessions.control_store.persist_compaction(
+        session_key=session.key,
+        trigger="test",
+        summary="已整理",
+        source_ref="test:status-commands:1",
+        source_plan_digest="a" * 64,
+        source_from_seq=cast(int, source[0]["seq"]),
+        consolidated_through_seq=cast(int, source[-1]["seq"]),
+        source_message_ids=[cast(str, message["id"]) for message in source],
+        retained_tail=[],
+        model_runtime_id="test",
+        model="test",
+        context_window=100,
+        threshold_tokens=80,
+        hard_input_tokens=90,
+        keep_recent_tokens=10,
+        tokens_before=10,
+        tokens_after=5,
+        summary_usage={},
+        generation=1,
+    )
+    sessions.invalidate(session.key)
+    before = _session_database_snapshot(workspace)
+    source_root = Path(plugin_module.__file__ or "").resolve().parent
+    plugin_root = tmp_path / "plugins" / "status_commands"
+    shutil.copytree(
+        source_root,
+        plugin_root,
+        ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__"),
+    )
+    manager = PluginManager(
+        plugin_dirs=[plugin_root.parent],
+        event_bus=EventBus(),
+        tool_registry=None,
+        workspace=workspace,
+        session_manager=sessions,
+        installed_cache_root=tmp_path / "home" / "cache",
+    )
+    try:
+        await manager.load_all()
+
+        snapshot = manager.current_snapshot
+        assert snapshot is not None and snapshot.command_registry is not None
+        execution = await snapshot.command_registry.execute(
+            "/memorystatus",
+            session_key=session.key,
+            channel="mobile",
+            chat_id="existing",
+            sender="hua",
+        )
+        assert execution is not None
+        assert execution.result.kind == "success"
+        assert "尚未整理的用户消息数：1" in execution.result.text
+        provider = PluginMobileUiProvider(manager)
+        catalog = cast(list[dict[str, object]], provider.catalog()["items"])
+        item = next(value for value in catalog if value["id"] == "status_commands")
+        result = await provider.query(
+            "status_commands",
+            cast(str, item["revision"]),
+            "memory.status",
+            {},
+            session_id=session.key,
+            turn_id=None,
+        )
+        assert result["state"] == "pending"
+        assert result["pending_user_messages"] == 1
+        assert result["last_consolidated_preview"] == "已整理的问题"
+        assert _session_database_snapshot(workspace) == before
+
+        root = snapshot.composition_root
+        assert root is not None
+        await manager.terminate_all()
+        assert root.topology_view().listeners == ()
+        assert root.receipt().effects == ()
+    finally:
+        sessions.close()
