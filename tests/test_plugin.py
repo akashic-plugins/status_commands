@@ -326,7 +326,9 @@ async def test_real_manager_publishes_committed_command_and_mobile_query(
     shutil.copytree(
         source_root,
         plugin_root,
-        ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__"),
+        ignore=shutil.ignore_patterns(
+            ".git", ".akashic-core", ".venv", "__pycache__"
+        ),
     )
     manager = PluginManager(
         plugin_dirs=[plugin_root.parent],
