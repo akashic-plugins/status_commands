@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
-from typing import Literal, TypedDict, cast
+from collections.abc import Sequence
+from typing import Literal, TypedDict
 
 from agent.plugin_composition import (
     COMMANDS,
-    SESSION_READ,
     UI_SLOTS,
     CommandDefinition,
     CommandInvocation,
@@ -14,16 +13,18 @@ from agent.plugin_composition import (
     Context,
     MobileUiDefinition,
     MobileUiRpcInvalidRequest,
-    SessionReadService,
 )
-from agent.prompting import is_context_frame
+from agent.plugin_composition.messages import MESSAGE_CATALOG
+from plugins.compaction.records import COMPACTION_SUMMARIES, SummaryLookup
+from session.log import MessageCatalog
+from session.message import ContentPart, Input, Message
 
 logger = logging.getLogger("plugin.status_commands")
 
 api_version = 3
 name = "status_commands"
-version = "2.0.0"
-inject = (COMMANDS, SESSION_READ, UI_SLOTS)
+version = "3.0.0"
+inject = (COMMANDS, MESSAGE_CATALOG, COMPACTION_SUMMARIES, UI_SLOTS)
 
 
 class MemoryStatusProjection(TypedDict):
@@ -37,14 +38,15 @@ class MemoryStatusProjection(TypedDict):
 async def apply(ctx: Context, config: object) -> None:
     """登记记忆状态命令和移动端只读界面。"""
 
-    # 1. 只取得命令和界面共同依赖的脱离 Session 快照
+    # 1. 只取得命令和界面共同依赖的消息与摘要读取口
     del config
-    session_read = ctx.require(SESSION_READ)
+    catalog = ctx.require(MESSAGE_CATALOG)
+    summaries = ctx.require(COMPACTION_SUMMARIES)
 
     async def handle_memory_status(
         invocation: CommandInvocation,
     ) -> CommandResult:
-        projection = _read_memory_status(session_read, invocation.session_key)
+        projection = _read_memory_status(catalog, summaries, invocation.session_key)
         logger.info("[status_commands] 命中命令: /%s", invocation.name)
         return CommandResult("success", _format_memory_status_reply(projection))
 
@@ -56,7 +58,7 @@ async def apply(ctx: Context, config: object) -> None:
         turn_id: str | None,
     ) -> dict[str, object]:
         return _mobile_memory_status_query(
-            session_read,
+            catalog, summaries,
             method,
             payload,
             session_id=session_id,
@@ -87,58 +89,46 @@ async def apply(ctx: Context, config: object) -> None:
 
 
 def _read_memory_status(
-    session_read: SessionReadService,
-    session_key: str,
+    catalog: MessageCatalog, summaries: SummaryLookup, session_key: str,
 ) -> MemoryStatusProjection:
-    snapshot = session_read.read(session_key)
-    if snapshot is None:
+    """只读已有消息和 Compaction 当前摘要，不创建会话。"""
+    reader = catalog.reader(session_key)
+    if session_key not in catalog.snapshot_heads():
         return _unavailable_memory_status_projection()
+    snapshot = reader.snapshot()
+    summary = summaries.head(session_key)
     return _build_memory_status_projection(
-        snapshot.messages,
-        snapshot.consolidated_through_seq,
+        snapshot, None if summary is None else frozenset(summary.source_message_ids),
     )
 
 
 def _mobile_memory_status_query(
-    session_read: SessionReadService,
-    method: str,
-    payload: dict[str, object],
-    *,
-    session_id: str | None,
-    turn_id: str | None,
+    catalog: MessageCatalog, summaries: SummaryLookup,
+    method: str, payload: dict[str, object], *,
+    session_id: str | None, turn_id: str | None,
 ) -> dict[str, object]:
-    """校验移动查询并返回既有 Session 的脱离投影。"""
-
-    # 1. 在插件 RPC 边界限定唯一的只读任务
+    """在 RPC 边界限定只读任务，命令和面板消费同一摘要覆盖集合。"""
     _ = payload, turn_id
     if method != "memory.status":
         raise MobileUiRpcInvalidRequest(f"未知 status_commands 移动方法: {method}")
     if session_id is None or not session_id.strip():
         raise MobileUiRpcInvalidRequest("memory.status 缺少 session_id")
-
-    # 2. 只读既有 Session，不触发创建或取得持久化 owner
-    return dict(_read_memory_status(session_read, session_id))
+    return dict(_read_memory_status(catalog, summaries, session_id))
 
 
 def _build_memory_status_projection(
-    messages: Sequence[Mapping[str, object]],
-    consolidated_through_seq: int | None,
+    messages: Sequence[Message], source_message_ids: frozenset[str] | None,
 ) -> MemoryStatusProjection:
-    """把 active compaction 边界投影为命令与移动端共用状态。"""
+    """按摘要真正覆盖的消息身份计数，不把 generation 或 seq 当数组下标。"""
+    # 1. 用户身份来自 Message；用户写出的协议示例也是正常正文。
+    user_messages = tuple(item for item in messages if isinstance(item.body, Input) and item.author == "user")
+    covered = source_message_ids or frozenset()
+    consolidated = tuple(item for item in user_messages if item.message_id in covered)
+    pending_user = len(user_messages) - len(consolidated)
+    last_user_message = _text(consolidated[-1]) if consolidated else ""
 
-    # 1. generation 与消息下标无关，只按 ledger 的 canonical seq 边界判断。
-    consolidated_messages = tuple(
-        item
-        for item in messages
-        if _is_consolidated_message(item, consolidated_through_seq)
-    )
-    consolidated_user = _count_real_user_messages(consolidated_messages)
-    total_user = _count_real_user_messages(messages)
-    pending_user = max(0, total_user - consolidated_user)
-    last_user_message = _latest_real_user_content(consolidated_messages)
-
-    # 2. 状态摘要只描述用户现在需要知道的整理进度。
-    if consolidated_through_seq is None or not last_user_message:
+    # 2. 当前 head 是已发布事实，未发布的模型请求不算整理完成。
+    if source_message_ids is None:
         state: Literal["never", "pending", "up_to_date"] = "never"
         summary = "还没有完成过整理"
     elif pending_user == 0:
@@ -152,24 +142,8 @@ def _build_memory_status_projection(
         "summary": summary,
         "pending_user_messages": pending_user,
         "message_count": len(messages),
-        "last_consolidated_preview": (
-            _preview_text(last_user_message) if last_user_message else None
-        ),
+        "last_consolidated_preview": _preview_text(last_user_message) if last_user_message else None,
     }
-
-
-def _is_consolidated_message(
-    item: Mapping[str, object],
-    consolidated_through_seq: int | None,
-) -> bool:
-    if consolidated_through_seq is None:
-        return False
-    seq = item.get("seq")
-    return (
-        isinstance(seq, int)
-        and not isinstance(seq, bool)
-        and seq <= consolidated_through_seq
-    )
 
 
 def _unavailable_memory_status_projection() -> MemoryStatusProjection:
@@ -209,38 +183,10 @@ def _format_memory_status_reply(projection: MemoryStatusProjection) -> str:
     return "\n".join(lines)
 
 
-def _count_real_user_messages(messages: Sequence[Mapping[str, object]]) -> int:
-    return sum(1 for item in messages if _is_real_user_message(item))
-
-
-def _latest_real_user_content(messages: Sequence[Mapping[str, object]]) -> str:
-    for item in reversed(messages):
-        if _is_real_user_message(item):
-            return _content_to_text(item.get("content", ""))
-    return ""
-
-
-def _is_real_user_message(item: Mapping[str, object]) -> bool:
-    if item.get("role") != "user":
-        return False
-    content = _content_to_text(item.get("content", ""))
-    return bool(content) and not is_context_frame(content)
-
-
-def _content_to_text(content: object) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        raw_items = cast(list[object], content)
-        parts: list[str] = []
-        for item in raw_items:
-            if not isinstance(item, dict):
-                continue
-            mapping = cast(dict[object, object], item)
-            if mapping.get("type") == "text":
-                parts.append(str(mapping.get("text", "")).strip())
-        return "\n".join(part for part in parts if part).strip()
-    return str(content).strip()
+def _text(message: Message) -> str:
+    assert isinstance(message.body, Input)
+    return "\n".join(str(part.value) for part in message.body.parts
+                     if isinstance(part, ContentPart) and part.kind == "text").strip()
 
 
 def _preview_text(text: str, limit: int = 80) -> str:
