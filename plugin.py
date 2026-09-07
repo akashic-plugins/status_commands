@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal, TypedDict
 
 from agent.plugin_composition import (
@@ -121,7 +121,7 @@ def _build_memory_status_projection(
 ) -> MemoryStatusProjection:
     """按摘要真正覆盖的消息身份计数，不把 generation 或 seq 当数组下标。"""
     # 1. 用户身份来自 Message；用户写出的协议示例也是正常正文。
-    user_messages = tuple(item for item in messages if isinstance(item.body, Input) and item.author == "user")
+    user_messages = tuple(item for item in messages if _is_user_input(item))
     covered = source_message_ids or frozenset()
     consolidated = tuple(item for item in user_messages if item.message_id in covered)
     pending_user = len(user_messages) - len(consolidated)
@@ -144,6 +144,21 @@ def _build_memory_status_projection(
         "message_count": len(messages),
         "last_consolidated_preview": _preview_text(last_user_message) if last_user_message else None,
     }
+
+
+def _is_user_input(message: Message) -> bool:
+    """旧消息保留未知作者，以原 role 事实计数，不改写用户身份。"""
+    if not isinstance(message.body, Input):
+        return False
+    if message.author == "user":
+        return True
+    return message.source == "legacy-unattributed" and any(
+        isinstance(part, ContentPart) and part.kind == "history.provenance"
+        and isinstance(part.value, Mapping)
+        and part.value.get("schema") == "sessions.messages.v0"
+        and part.value.get("role") == "user"
+        for part in message.body.parts
+    )
 
 
 def _unavailable_memory_status_projection() -> MemoryStatusProjection:

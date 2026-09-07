@@ -11,7 +11,7 @@ from bus.event_bus import EventBus
 from plugins.compaction.records import SummaryLookup, SummaryRecord, SummaryRecords
 from plugins.content.plugin import check_text
 from session.log import MessageCatalog, MessageLog
-from session.message import ContentPart, Input, Output
+from session.message import ContentPart, ContentReferences, Input, Output
 
 import status_commands_source.plugin as plugin_module
 
@@ -113,3 +113,17 @@ async def apply(ctx, config):
             assert log.reader('s').snapshot() == before
     finally:
         await manager.terminate_all()
+
+
+def test_legacy_user_role_counts_without_inventing_author(state):
+    log, records, lookup = state
+    publish(log, records)
+    writer = log.writer('s', author='legacy-attribution-unknown', source='legacy-unattributed',
+                        body_types=(Input,), content={'text': check_text, 'history.provenance': lambda part: ContentReferences()})
+    old = writer.append('legacy-user', Input((ContentPart('text', '旧用户正文'), ContentPart('history.provenance', {
+        'schema': 'sessions.messages.v0', 'role': 'user', 'content_was_null': False,
+        'extra': None, 'extra_sha256': None,
+    }))))
+    result = plugin_module._read_memory_status(MessageCatalog(log), lookup, 's')
+    assert result['pending_user_messages'] == 2
+    assert log.reader('s').get(old.message_id).author == 'legacy-attribution-unknown'
