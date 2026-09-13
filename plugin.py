@@ -15,9 +15,13 @@ from agent.plugin_composition import (
     MobileUiRpcInvalidRequest,
 )
 from agent.plugin_composition.messages import MESSAGE_CATALOG
-from plugins.compaction.records import COMPACTION_SUMMARIES, SummaryLookup
-from session.log import MessageCatalog
-from session.message import ContentPart, Input, Message
+from agent.plugin_composition.messages import MessageCatalog
+from agent.plugin_contracts import ContentPart, Input, Message
+
+if __package__:
+    from .boundary import COMPACTION_SUMMARIES, SummaryLookup
+else:  # test harness imports the entrypoint as a standalone module
+    from boundary import COMPACTION_SUMMARIES, SummaryLookup
 
 logger = logging.getLogger("plugin.status_commands")
 
