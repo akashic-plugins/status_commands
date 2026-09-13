@@ -9,6 +9,7 @@ from agent.plugins.mobile_ui import PluginMobileUiProvider
 from agent.plugins.snapshot import lease_runtime_snapshot
 from bus.event_bus import EventBus
 from plugins.compaction.records import SummaryLookup, SummaryRecord, SummaryRecords
+from plugins.context.api import summary_range
 from plugins.content.plugin import check_text
 from session.log import MessageCatalog, MessageLog
 from session.message import ContentPart, ContentReferences, Input, Output
@@ -36,7 +37,7 @@ def publish(log, records):
         source_message_ids=('u1', 'a1'), content='已整理', model_call_ids=('fixture-call',),
         trigger='soft_limit', context_window=1000, max_output_tokens=100,
         keep_recent_tokens=100, tokens_before=800, tokens_after=300,
-    ), log.reader('s'), parent=None)
+    ), log.reader('s'), parent=None, summary_range=summary_range)
 
 
 def test_projection_reads_actual_summary_coverage_and_keeps_literal_user_text(state):
