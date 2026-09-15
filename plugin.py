@@ -39,11 +39,10 @@ class MemoryStatusProjection(TypedDict):
     last_consolidated_preview: str | None
 
 
-async def apply(ctx: Context, config: object) -> None:
+async def apply(ctx: Context) -> None:
     """登记记忆状态命令和移动端只读界面。"""
 
     # 1. 只取得命令和界面共同依赖的消息与摘要读取口
-    del config
     catalog = ctx.require(MESSAGE_CATALOG)
     summaries = ctx.require(COMPACTION_SUMMARIES)
 
