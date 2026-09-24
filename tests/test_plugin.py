@@ -7,7 +7,6 @@ import pytest
 from agent.plugins.manager import PluginManager
 from agent.plugin_composition import COMMANDS
 from agent.plugins.mobile_ui import PluginMobileUiProvider
-from agent.plugins.snapshot import lease_runtime_snapshot
 from bus.event_bus import EventBus
 from agent.plugins.selection import PluginSelection
 from plugins.compaction.records import SummaryLookup, SummaryRecord, SummaryRecords
@@ -115,18 +114,21 @@ async def apply(ctx):
         await manager.load_all()
         await manager.start_runtime()
         before = log.reader('s').snapshot()
-        async with lease_runtime_snapshot(manager.snapshot_store) as snapshot:
-            assert snapshot.composition_root is not None
-            commands = snapshot.composition_root.context.require(COMMANDS).freeze()
-            execution = await commands.execute('/memory_status', session_key='s', channel='web', chat_id='s', sender='hua')
-            assert execution.result.kind == 'success'
-            assert '尚未整理的用户消息数：1' in execution.result.text
-            provider = PluginMobileUiProvider(manager.snapshot_store)
-            item = next(row for row in provider.catalog()['items'] if row['id'] == 'status_commands')
+        root = manager.live_root
+        assert root is not None
+        commands = root.context.require(COMMANDS).freeze()
+        execution = await commands.execute('/memory_status', session_key='s', channel='web', chat_id='s', sender='hua')
+        assert execution.result.kind == 'success'
+        assert '尚未整理的用户消息数：1' in execution.result.text
+        provider = PluginMobileUiProvider(root)
+        try:
+            item = next(row for row in (await provider.catalog())['items'] if row['id'] == 'status_commands')
             result = await provider.query('status_commands', item['revision'], 'memory.status', {}, session_id='s', turn_id=None)
             assert result['last_consolidated_preview'] == '已整理的问题'
             assert result['pending_user_messages'] == 1
             assert log.reader('s').snapshot() == before
+        finally:
+            await provider.aclose()
     finally:
         await manager.terminate_all()
 
