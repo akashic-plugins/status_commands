@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from agent.plugins.manager import PluginManager
 from agent.plugin_composition import COMMANDS
-from agent.plugins.mobile_ui import PluginMobileUiProvider
+from agent.plugin_contracts.ui import PLUGIN_UI
 from bus.event_bus import EventBus
 from agent.plugins.selection import PluginSelection
 from plugins.compaction.records import SummaryLookup, SummaryRecord, SummaryRecords
@@ -63,17 +63,17 @@ def test_unknown_session_is_not_created_and_rpc_rejects_unknown_requests(state):
     log, _records, lookup = state
     catalog = MessageCatalog(log)
     before = dict(catalog.snapshot_heads())
-    result = plugin_module._mobile_memory_status_query(catalog, lookup, 'memory.status', {}, session_id='missing', turn_id=None)
+    result = plugin_module._plugin_ui_memory_status_query(catalog, lookup, 'memory.status', {}, session_id='missing', turn_id=None)
     assert result['state'] == 'unavailable'
     assert dict(catalog.snapshot_heads()) == before
-    with pytest.raises(plugin_module.MobileUiRpcInvalidRequest, match='缺少 session_id'):
-        plugin_module._mobile_memory_status_query(catalog, lookup, 'memory.status', {}, session_id=None, turn_id=None)
-    with pytest.raises(plugin_module.MobileUiRpcInvalidRequest, match='未知'):
-        plugin_module._mobile_memory_status_query(catalog, lookup, 'write', {}, session_id='s', turn_id=None)
+    with pytest.raises(plugin_module.PluginUiRpcInvalidRequest, match='缺少 session_id'):
+        plugin_module._plugin_ui_memory_status_query(catalog, lookup, 'memory.status', {}, session_id=None, turn_id=None)
+    with pytest.raises(plugin_module.PluginUiRpcInvalidRequest, match='未知'):
+        plugin_module._plugin_ui_memory_status_query(catalog, lookup, 'write', {}, session_id='s', turn_id=None)
 
 
 @pytest.mark.asyncio
-async def test_real_manager_command_and_mobile_read_same_persisted_summary(tmp_path, state):
+async def test_real_manager_command_and_plugin_ui_read_same_persisted_summary(tmp_path, state):
     log, records, _lookup = state
     publish(log, records)
     source = tmp_path / 'plugins'
@@ -118,17 +118,15 @@ async def apply(ctx):
         assert root is not None
         commands = root.context.require(COMMANDS).freeze()
         execution = await commands.execute('/memory_status', session_key='s', channel='web', chat_id='s', sender='hua')
-        assert execution.result.kind == 'success'
+        assert execution is not None and execution.result.kind == 'success'
         assert '尚未整理的用户消息数：1' in execution.result.text
-        provider = PluginMobileUiProvider(root)
-        try:
-            item = next(row for row in (await provider.catalog())['items'] if row['id'] == 'status_commands')
-            result = await provider.query('status_commands', item['revision'], 'memory.status', {}, session_id='s', turn_id=None)
-            assert result['last_consolidated_preview'] == '已整理的问题'
-            assert result['pending_user_messages'] == 1
-            assert log.reader('s').snapshot() == before
-        finally:
-            await provider.aclose()
+        provider = root.context.require(PLUGIN_UI)
+        catalog = await provider.catalog()
+        item = next(row for row in catalog['items'] if row['id'] == 'status_commands')
+        result = await provider.query('status_commands', item['revision'], 'memory.status', {}, session_id='s', turn_id=None)
+        assert result['last_consolidated_preview'] == '已整理的问题'
+        assert result['pending_user_messages'] == 1
+        assert log.reader('s').snapshot() == before
     finally:
         await manager.terminate_all()
 
