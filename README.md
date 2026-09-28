@@ -1,6 +1,6 @@
 # status_commands 插件
 
-通过 `/memorystatus`、`/memory_status`、`/compact_status` 和移动会话面板查看记忆整理状态。
+通过 `/memorystatus`、`/memory_status`、`/compact_status` 和Web 插件界面查看记忆整理状态。
 
 插件只读取 `core.message_catalog` 中已有 Message，以及 Compaction 的 `compaction.summaries.v1` 当前已发布摘要。摘要的 `source_message_ids` 决定已整理范围；generation 和 seq 都不作为数组下标。只统计 author 为 user 的 Input，用户正文里的协议示例仍是正常输入。
 
