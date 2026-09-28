@@ -10,8 +10,8 @@
 
 ```bash
 AKASHIC_AGENT_ROOT=/path/to/core PYTHONPATH=/path/to/core pytest -q
-node --test tests/test_mobile_panel.mjs
+node --test tests/test_plugin_ui.mjs
 PYTHONPATH=/path/to/core pyright --level error plugin.py
 ```
 
-测试包括真实 MessageLog / SummaryRecords 的读取，以及真实 PluginManager 发布的命令和 Mobile 查询；测试中的摘要 provider 只提供同一持久 SummaryRecords 的窄读取口。
+测试包括真实 MessageLog / SummaryRecords 的读取，以及真实 PluginManager 发布的命令和 Web 插件界面查询；测试中的摘要 provider 只提供同一持久 SummaryRecords 的窄读取口。

@@ -11,8 +11,8 @@ from agent.plugin_composition import (
     CommandInvocation,
     CommandResult,
     Context,
-    MobileUiDefinition,
-    MobileUiRpcInvalidRequest,
+    PluginUiDefinition,
+    PluginUiRpcInvalidRequest,
 )
 from agent.plugin_composition.messages import MESSAGE_CATALOG
 from agent.plugin_composition.messages import MessageCatalog
@@ -39,11 +39,10 @@ class MemoryStatusProjection(TypedDict):
     last_consolidated_preview: str | None
 
 
-async def apply(ctx: Context, config: object) -> None:
-    """登记记忆状态命令和移动端只读界面。"""
+async def apply(ctx: Context) -> None:
+    """登记记忆状态命令和 Web 插件界面。"""
 
     # 1. 只取得命令和界面共同依赖的消息与摘要读取口
-    del config
     catalog = ctx.require(MESSAGE_CATALOG)
     summaries = ctx.require(COMPACTION_SUMMARIES)
 
@@ -61,7 +60,7 @@ async def apply(ctx: Context, config: object) -> None:
         session_id: str | None,
         turn_id: str | None,
     ) -> dict[str, object]:
-        return _mobile_memory_status_query(
+        return _plugin_ui_memory_status_query(
             catalog, summaries,
             method,
             payload,
@@ -80,12 +79,12 @@ async def apply(ctx: Context, config: object) -> None:
         ),
     )
 
-    # 3. Mobile UI 资产与查询处理器作为同一个 generation Effect 发布
-    await ctx.require(UI_SLOTS).register_mobile(
+    # 3. 插件界面资源与查询处理器由同一个 generation Effect 发布。
+    await ctx.require(UI_SLOTS).register_plugin_ui(
         ctx,
-        MobileUiDefinition(
-            module="mobile_panel.js",
-            stylesheet="mobile_panel.css",
+        PluginUiDefinition(
+            module="plugin_ui.js",
+            stylesheet="plugin_ui.css",
             slots=("drawer.panel",),
         ),
         query=query_memory_status,
@@ -106,7 +105,7 @@ def _read_memory_status(
     )
 
 
-def _mobile_memory_status_query(
+def _plugin_ui_memory_status_query(
     catalog: MessageCatalog, summaries: SummaryLookup,
     method: str, payload: dict[str, object], *,
     session_id: str | None, turn_id: str | None,
@@ -114,9 +113,9 @@ def _mobile_memory_status_query(
     """在 RPC 边界限定只读任务，命令和面板消费同一摘要覆盖集合。"""
     _ = payload, turn_id
     if method != "memory.status":
-        raise MobileUiRpcInvalidRequest(f"未知 status_commands 移动方法: {method}")
+        raise PluginUiRpcInvalidRequest(f"未知 status_commands 插件界面方法: {method}")
     if session_id is None or not session_id.strip():
-        raise MobileUiRpcInvalidRequest("memory.status 缺少 session_id")
+        raise PluginUiRpcInvalidRequest("memory.status 缺少 session_id")
     return dict(_read_memory_status(catalog, summaries, session_id))
 
 

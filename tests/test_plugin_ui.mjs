@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const source = await readFile(new URL("../mobile_panel.js", import.meta.url), "utf8");
+const source = await readFile(new URL("../plugin_ui.js", import.meta.url), "utf8");
 const panel = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 
 class FakeElement {
@@ -72,7 +72,7 @@ class PanelHost extends FakeElement {
   }
 }
 
-test("mobile surface is drawer-only and does not reclaim KV Cache", () => {
+test("plugin UI surface is drawer-only and does not reclaim KV Cache", () => {
   assert.equal(typeof panel.default.slots["drawer.panel"].mount, "function");
   assert.equal(panel.default.dashboard, undefined);
   assert.equal(panel.default.navigation, undefined);
@@ -96,7 +96,7 @@ test("drawer projection follows the provided session context and stays collapsed
   const host = new PanelHost();
   const calls = [];
   panel.default.slots["drawer.panel"].mount(host, {
-    sessionId: "mobile:one",
+    sessionId: "web:one",
     query(method, payload) {
       calls.push({ method, payload });
       return Promise.resolve({
@@ -123,7 +123,7 @@ test("drawer projection follows the provided session context and stays collapsed
 test("detail leaves the accessibility tree while collapsed", async () => {
   const host = new PanelHost();
   panel.default.slots["drawer.panel"].mount(host, {
-    sessionId: "mobile:two",
+    sessionId: "web:two",
     query() {
       return Promise.resolve({
         state: "up_to_date",
@@ -167,7 +167,7 @@ test("opening the same session refreshes the projection in place", async () => {
   ];
   let requests = 0;
   panel.default.slots["drawer.panel"].mount(host, {
-    sessionId: "mobile:same",
+    sessionId: "web:same",
     query() {
       const response = responses[requests];
       requests += 1;
@@ -190,7 +190,7 @@ test("a late refresh cannot overwrite a newer request generation", async () => {
   const host = new PanelHost();
   const pending = [];
   panel.default.slots["drawer.panel"].mount(host, {
-    sessionId: "mobile:same",
+    sessionId: "web:same",
     query() {
       return new Promise((resolve) => pending.push(resolve));
     },
@@ -231,7 +231,7 @@ test("a late refresh cannot overwrite a newer request generation", async () => {
 test("unavailable session is neutral and cannot expand", async () => {
   const host = new PanelHost();
   panel.default.slots["drawer.panel"].mount(host, {
-    sessionId: "mobile:deleted",
+    sessionId: "web:deleted",
     query() {
       return Promise.resolve({
         state: "unavailable",
