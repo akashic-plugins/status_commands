@@ -17,6 +17,7 @@ from agent.plugin_composition import (
 from agent.plugin_composition.messages import MESSAGE_CATALOG
 from agent.plugin_composition.messages import MessageCatalog
 from agent.plugin_contracts import ContentPart, Input, Message
+from core.common.file_io import run_file_io
 
 if __package__:
     from .boundary import COMPACTION_SUMMARIES, SummaryLookup
@@ -49,7 +50,9 @@ async def apply(ctx: Context) -> None:
     async def handle_memory_status(
         invocation: CommandInvocation,
     ) -> CommandResult:
-        projection = _read_memory_status(catalog, summaries, invocation.session_key)
+        projection = await run_file_io(
+            lambda: _read_memory_status(catalog, summaries, invocation.session_key),
+        )
         logger.info("[status_commands] 命中命令: /%s", invocation.name)
         return CommandResult("success", _format_memory_status_reply(projection))
 
