@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 from agent.plugins.manager import PluginManager
-from agent.plugin_composition import COMMANDS
+from plugins.commands.contract import COMMANDS
 from agent.plugin_contracts.ui import PLUGIN_UI
-from bus.event_bus import EventBus
 from agent.plugins.selection import PluginSelection
 from plugins.compaction.records import SummaryLookup, SummaryRecord, SummaryRecords
 from plugins.context.api import summary_range
@@ -43,12 +42,13 @@ def publish(log, records):
     ), log.reader('s'), parent=None, summary_range=summary_range)
 
 
-def test_projection_reads_actual_summary_coverage_and_keeps_literal_user_text(state):
+@pytest.mark.asyncio
+async def test_projection_reads_actual_summary_coverage_and_keeps_literal_user_text(state):
     log, records, lookup = state
     before = log.reader('s').snapshot()
     never = plugin_module._read_memory_status(MessageCatalog(log), lookup, 's')
     assert never['state'] == 'never' and never['pending_user_messages'] == 2
-    publish(log, records)
+    await publish(log, records)
     result = plugin_module._read_memory_status(MessageCatalog(log), lookup, 's')
     assert result == {'state': 'pending', 'summary': '有 1 条消息待整理',
                       'pending_user_messages': 1, 'message_count': 3,
@@ -75,7 +75,7 @@ def test_unknown_session_is_not_created_and_rpc_rejects_unknown_requests(state):
 @pytest.mark.asyncio
 async def test_real_manager_command_and_plugin_ui_read_same_persisted_summary(tmp_path, state):
     log, records, _lookup = state
-    publish(log, records)
+    await publish(log, records)
     source = tmp_path / 'plugins'
     plugin_root = source / 'status_commands'
     shutil.copytree(Path(plugin_module.__file__).parent, plugin_root,
@@ -105,7 +105,7 @@ async def apply(ctx):
         )
     (tmp_path / 'workspace').mkdir()
     PluginSelection(tmp_path / 'workspace').initialize()
-    manager = PluginManager([source], event_bus=EventBus(), workspace=tmp_path / 'workspace',
+    manager = PluginManager([source], workspace=tmp_path / 'workspace',
                             message_log=log, installed_cache_root=tmp_path / 'cache')
     async def _switch(old, new):
         _ = (old, new)
@@ -131,9 +131,10 @@ async def apply(ctx):
         await manager.terminate_all()
 
 
-def test_legacy_user_role_counts_without_inventing_author(state):
+@pytest.mark.asyncio
+async def test_legacy_user_role_counts_without_inventing_author(state):
     log, records, lookup = state
-    publish(log, records)
+    await publish(log, records)
     writer = log.writer('s', author='legacy-attribution-unknown', source='legacy-unattributed',
                         body_types=(Input,), content={'text': check_text, 'history.provenance': lambda part: ContentReferences()})
     old = writer.append('legacy-user', Input((ContentPart('text', '旧用户正文'), ContentPart('history.provenance', {

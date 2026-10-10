@@ -4,16 +4,9 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Literal, TypedDict
 
-from agent.plugin_composition import (
-    COMMANDS,
-    UI_SLOTS,
-    CommandDefinition,
-    CommandInvocation,
-    CommandResult,
-    Context,
-    PluginUiDefinition,
-    PluginUiRpcInvalidRequest,
-)
+from agent.plugin_composition import Context
+from plugins.commands.contract import COMMANDS, CommandDefinition, CommandInvocation, CommandResult
+from plugins.ui.contract import UI_SLOTS, PluginUiDefinition, PluginUiRpcInvalidRequest
 from agent.plugin_composition.messages import MESSAGE_CATALOG
 from agent.plugin_composition.messages import MessageCatalog
 from agent.plugin_contracts import ContentPart, Input, Message
@@ -28,7 +21,7 @@ logger = logging.getLogger("plugin.status_commands")
 
 api_version = 3
 name = "status_commands"
-version = "3.0.0"
+version = "3.0.1"
 inject = (COMMANDS, MESSAGE_CATALOG, COMPACTION_SUMMARIES, UI_SLOTS)
 
 

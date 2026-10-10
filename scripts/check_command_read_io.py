@@ -14,10 +14,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
 
-from agent.plugin_composition import COMMANDS
+from plugins.commands.contract import COMMANDS
 from agent.plugins.manager import PluginManager
 from agent.plugins.selection import PluginSelection
-from bus.event_bus import EventBus
 from plugins.compaction.records import SummaryRecord, SummaryRecords
 from plugins.content.plugin import check_text
 from plugins.context.api import summary_range
@@ -94,7 +93,7 @@ async def apply(ctx):
     workspace = root / "workspace"
     workspace.mkdir()
     PluginSelection(workspace).initialize()
-    manager = PluginManager([plugins], event_bus=EventBus(), workspace=workspace,
+    manager = PluginManager([plugins], workspace=workspace,
                             message_log=log, installed_cache_root=root / "cache")
 
     async def switch(old, new):
