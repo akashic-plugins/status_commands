@@ -6,20 +6,21 @@ from pathlib import Path
 import pytest
 from agent.plugins.manager import PluginManager
 from plugins.commands.contract import COMMANDS
-from agent.plugin_contracts.ui import PLUGIN_UI
+from plugins.ui.contract import PLUGIN_UI
 from agent.plugins.selection import PluginSelection
 from plugins.compaction.records import SummaryLookup, SummaryRecord, SummaryRecords
 from plugins.context.api import summary_range
 from plugins.content.plugin import check_text
-from session.log import MessageCatalog, MessageLog
-from session.message import ContentPart, ContentReferences, Input, Output
+from plugins.ledger.log import MessageCatalog, MessageLog
+from plugins.ledger.contract import ContentPart, ContentReferences, Input, Output
 
 import status_commands_source.plugin as plugin_module
 
 
 @pytest.fixture
 def state(tmp_path):
-    log = MessageLog(tmp_path / 'sessions.db')
+    (tmp_path / "workspace").mkdir()
+    log = MessageLog(tmp_path / 'workspace' / 'sessions.db')
     inputs = log.writer('s', author='user', source='conversation', body_types=(Input,), content={'text': check_text})
     outputs = log.writer('s', author='assistant', source='conversation', body_types=(Output,), content={'text': check_text})
     inputs.append('u1', Input((ContentPart('text', '已整理的问题'),)))
@@ -83,7 +84,7 @@ async def test_real_manager_command_and_plugin_ui_read_same_persisted_summary(tm
     provider = source / 'compaction'
     provider.mkdir()
     (provider / 'plugin.py').write_text('''from agent.plugin_composition import RUNTIME_STARTED
-from agent.plugin_composition.messages import OWNER_STATE
+from plugins.ledger.contract import OWNER_STATE
 from plugins.compaction.records import COMPACTION_SUMMARIES, SummaryLookup, SummaryRecords
 api_version = 3
 name = "compaction"
@@ -98,15 +99,14 @@ async def apply(ctx):
     await ctx.provide(COMPACTION_SUMMARIES, SummaryLookup(
         lambda ref: records.read(ref), lambda session: records.head(session)))
 ''')
-    for provider_name in ('commands', 'ui'):
+    for provider_name in ('ledger', 'commands', 'ui'):
         shutil.copytree(
             Path(__import__(f'plugins.{provider_name}.plugin', fromlist=['x']).__file__).parents[0],
             source / provider_name,
         )
-    (tmp_path / 'workspace').mkdir()
+    (tmp_path / 'workspace').mkdir(exist_ok=True)
     PluginSelection(tmp_path / 'workspace').initialize()
-    manager = PluginManager([source], workspace=tmp_path / 'workspace',
-                            message_log=log, installed_cache_root=tmp_path / 'cache')
+    manager = PluginManager([source], workspace=tmp_path / 'workspace', installed_cache_root=tmp_path / 'cache')
     async def _switch(old, new):
         _ = (old, new)
     manager.bind_endpoint_switcher(_switch)
