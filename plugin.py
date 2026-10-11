@@ -7,15 +7,12 @@ from typing import Literal, TypedDict
 from agent.plugin_composition import Context
 from plugins.commands.contract import COMMANDS, CommandDefinition, CommandInvocation, CommandResult
 from plugins.ui.contract import UI_SLOTS, PluginUiDefinition, PluginUiRpcInvalidRequest
-from agent.plugin_composition.messages import MESSAGE_CATALOG
-from agent.plugin_composition.messages import MessageCatalog
-from agent.plugin_contracts import ContentPart, Input, Message
+from plugins.ledger.contract import MESSAGE_CATALOG
+from plugins.ledger.contract import MessageCatalog
+from plugins.ledger.contract import ContentPart, Input, Message
 from core.common.file_io import run_file_io
 
-if __package__:
-    from .boundary import COMPACTION_SUMMARIES, SummaryLookup
-else:  # test harness imports the entrypoint as a standalone module
-    from boundary import COMPACTION_SUMMARIES, SummaryLookup
+from plugins.compaction.contract import COMPACTION_SUMMARIES, SummaryLookup
 
 logger = logging.getLogger("plugin.status_commands")
 
