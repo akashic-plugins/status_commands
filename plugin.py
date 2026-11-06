@@ -10,7 +10,7 @@ from plugins.ui.contract import UI_SLOTS, PluginUiDefinition, PluginUiRpcInvalid
 from plugins.ledger.contract import MESSAGE_CATALOG
 from plugins.ledger.contract import MessageCatalog
 from plugins.ledger.contract import ContentPart, Input, Message
-from plugins.ledger.provenance import is_human_input
+from plugins.ledger.contract import is_human_input
 from core.common.file_io import run_file_io
 
 from plugins.compaction.contract import COMPACTION_SUMMARIES, SummaryLookup
