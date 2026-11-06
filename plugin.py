@@ -10,7 +10,7 @@ from plugins.ui.contract import UI_SLOTS, PluginUiDefinition, PluginUiRpcInvalid
 from plugins.ledger.contract import MESSAGE_CATALOG
 from plugins.ledger.contract import MessageCatalog
 from plugins.ledger.contract import ContentPart, Input, Message
-from plugins.ledger.contract import is_human_input
+from plugins.ledger.contract import is_user_input
 from core.common.file_io import run_file_io
 
 from plugins.compaction.contract import COMPACTION_SUMMARIES, SummaryLookup
@@ -118,7 +118,7 @@ def _build_memory_status_projection(
 ) -> MemoryStatusProjection:
     """按摘要真正覆盖的消息身份计数，不把 generation 或 seq 当数组下标。"""
     # 1. 用户身份统一读 Core 的出处判定；用户写出的协议示例也是正常正文。
-    user_messages = tuple(item for item in messages if is_human_input(item))
+    user_messages = tuple(item for item in messages if is_user_input(item))
     covered = source_message_ids or frozenset()
     consolidated = tuple(item for item in user_messages if item.message_id in covered)
     pending_user = len(user_messages) - len(consolidated)
