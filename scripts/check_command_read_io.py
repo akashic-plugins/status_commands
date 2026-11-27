@@ -20,11 +20,11 @@ from agent.plugins.selection import PluginSelection
 from plugins.compaction.records import SummaryRecord, SummaryRecords
 from plugins.content.plugin import check_text
 from plugins.context.api import summary_range
-from session.log import MessageLog, MessageReader
-from session.message import ContentPart, Input, Message, Output
+from plugins.ledger.log import MessageLog, MessageReader
+from plugins.ledger.contract import MESSAGE_CATALOG, ContentPart, Input, Message, Output
 
 
-def seed(log: MessageLog) -> None:
+async def seed(log: MessageLog) -> None:
     """保存真实消息与已发布摘要，再追加足以覆盖全历史读取的正文。"""
     # 1. 摘要覆盖身份保持固定，后来的用户消息仍待整理。
     inputs = log.writer("s", author="user", source="conversation",
@@ -33,7 +33,7 @@ def seed(log: MessageLog) -> None:
                          body_types=(Output,), content={"text": check_text})
     inputs.append("u1", Input((ContentPart("text", "已整理的问题"),)))
     outputs.append("a1", Output((ContentPart("text", "旧回答"),), "complete"))
-    SummaryRecords(log.owner("plugin:compaction")).publish(SummaryRecord(
+    await SummaryRecords(log.owner("plugin:compaction")).publish(SummaryRecord(
         reference="summary-1", session_id="s", generation=1, parent=None,
         source_message_ids=("u1", "a1"), content="已整理",
         summary_message_ids=("u1", "a1"), omitted_message_ids=(),
@@ -56,18 +56,18 @@ def rows_digest(path: Path) -> str:
     return hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode()).hexdigest()
 
 
-async def load_manager(source: Path, root: Path, log: MessageLog) -> PluginManager:
+async def load_manager(source: Path, root: Path) -> PluginManager:
     """通过真实安装与命令注册链加载插件，摘要夹具只提供实际持久读取口。"""
     # 1. 候选代码从独立源码目录复制；不读取或修改安装 cache。
     plugins = root / "plugins"
     target = plugins / "status_commands"
     target.mkdir(parents=True)
-    for name in ("plugin.py", "boundary.py", "plugin_ui.js", "plugin_ui.css"):
+    for name in ("plugin.py", "plugin_ui.js", "plugin_ui.css"):
         shutil.copy2(source / name, target / name)
     provider = plugins / "compaction"
     provider.mkdir()
     (provider / "plugin.py").write_text('''from agent.plugin_composition import RUNTIME_STARTED, RUNTIME_STOPPING
-from agent.plugin_composition.messages import OWNER_STATE
+from plugins.ledger.contract import OWNER_STATE
 from plugins.compaction.records import COMPACTION_SUMMARIES, SummaryLookup, SummaryRecords
 api_version = 3
 name = "compaction"
@@ -86,15 +86,14 @@ async def apply(ctx):
     await ctx.provide(COMPACTION_SUMMARIES, SummaryLookup(
         lambda ref: records.read(ref), lambda session: records.head(session)))
 ''')
-    for name in ("commands", "ui"):
+    for name in ("ledger", "commands", "ui"):
         module = __import__(f"plugins.{name}.plugin", fromlist=["__file__"])
         shutil.copytree(Path(module.__file__).parent, plugins / name,
                         ignore=shutil.ignore_patterns("__pycache__"))
     workspace = root / "workspace"
-    workspace.mkdir()
+    workspace.mkdir(exist_ok=True)
     PluginSelection(workspace).initialize()
-    manager = PluginManager([plugins], workspace=workspace,
-                            message_log=log, installed_cache_root=root / "cache")
+    manager = PluginManager([plugins], workspace=workspace, installed_cache_root=root / 'cache')
 
     async def switch(old, new):
         _ = old, new
@@ -109,11 +108,12 @@ async def scenario(source: Path, kind: str, expect_blocking: bool) -> dict[str, 
     """在原快照入口暂停物理工作，独立线程保证失败场景也会释放。"""
     with TemporaryDirectory(prefix="status-command-io-") as directory:
         root = Path(directory)
-        database = root / "sessions.db"
+        (root / "workspace").mkdir()
+        database = root / "workspace" / "sessions.db"
         log = MessageLog(database)
-        seed(log)
+        await seed(log)
         before = rows_digest(database)
-        manager = await load_manager(source, root, log)
+        manager = await load_manager(source, root)
         live = manager.live_root
         assert live is not None
         commands = live.context.require(COMMANDS).freeze()
@@ -123,7 +123,8 @@ async def scenario(source: Path, kind: str, expect_blocking: bool) -> dict[str, 
         release = threading.Event()
         physical_done = threading.Event()
         observed: dict[str, object] = {}
-        original = MessageReader.snapshot
+        reader_type = type(live.context.require(MESSAGE_CATALOG).reader("s"))
+        original = reader_type.snapshot
         caller = None
         stopping = None
 
@@ -171,7 +172,7 @@ async def scenario(source: Path, kind: str, expect_blocking: bool) -> dict[str, 
 
         # 2. 只有入口屏障替换；释放后读取原数据库、构造原命令结果。
         thread = threading.Thread(target=controller, daemon=True)
-        MessageReader.snapshot = paused
+        reader_type.snapshot = paused
         started = time.monotonic()
         try:
             thread.start()
@@ -207,7 +208,7 @@ async def scenario(source: Path, kind: str, expect_blocking: bool) -> dict[str, 
             )
         finally:
             release.set()
-            MessageReader.snapshot = original
+            reader_type.snapshot = original
             thread.join(2)
             if caller is not None and not caller.done():
                 await asyncio.gather(caller, return_exceptions=True)
