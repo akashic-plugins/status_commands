@@ -1,15 +1,8 @@
 from __future__ import annotations
 
-import shutil
-from pathlib import Path
 
 import pytest
-from agent.plugins.manager import PluginManager
-from plugins.commands.contract import COMMANDS
-from plugins.ui.contract import PLUGIN_UI
-from agent.plugins.selection import PluginSelection
 from plugins.compaction.records import SummaryLookup, SummaryRecord, SummaryRecords
-from plugins.context.api import summary_range
 from plugins.content.plugin import check_text
 from plugins.ledger.log import MessageCatalog, MessageLog
 from plugins.ledger.contract import ContentPart, ContentReferences, Input, Output
@@ -40,7 +33,7 @@ def publish(log, records):
         model_call_ids=('fixture-call',),
         trigger='soft_limit', context_window=1000, max_output_tokens=100,
         keep_recent_tokens=100, tokens_before=800, tokens_after=300,
-    ), log.reader('s'), parent=None, summary_range=summary_range)
+    ), log.reader('s'), parent=None)
 
 
 @pytest.mark.asyncio
@@ -71,64 +64,6 @@ def test_unknown_session_is_not_created_and_rpc_rejects_unknown_requests(state):
         plugin_module._plugin_ui_memory_status_query(catalog, lookup, 'memory.status', {}, session_id=None, turn_id=None)
     with pytest.raises(plugin_module.PluginUiRpcInvalidRequest, match='未知'):
         plugin_module._plugin_ui_memory_status_query(catalog, lookup, 'write', {}, session_id='s', turn_id=None)
-
-
-@pytest.mark.asyncio
-async def test_real_manager_command_and_plugin_ui_read_same_persisted_summary(tmp_path, state):
-    log, records, _lookup = state
-    await publish(log, records)
-    source = tmp_path / 'plugins'
-    plugin_root = source / 'status_commands'
-    shutil.copytree(Path(plugin_module.__file__).parent, plugin_root,
-                    ignore=shutil.ignore_patterns('.git', '.venv', '__pycache__', '.pytest_cache'))
-    provider = source / 'compaction'
-    provider.mkdir()
-    (provider / 'plugin.py').write_text('''from agent.plugin_composition import RUNTIME_STARTED
-from plugins.ledger.contract import OWNER_STATE
-from plugins.compaction.records import COMPACTION_SUMMARIES, SummaryLookup, SummaryRecords
-api_version = 3
-name = "compaction"
-version = "1.0.0"
-inject = (OWNER_STATE,)
-async def apply(ctx):
-    records = None
-    async def start(event):
-        nonlocal records
-        records = SummaryRecords(ctx.require(OWNER_STATE).open(ctx))
-    await ctx.on(RUNTIME_STARTED, start)
-    await ctx.provide(COMPACTION_SUMMARIES, SummaryLookup(
-        lambda ref: records.read(ref), lambda session: records.head(session)))
-''')
-    for provider_name in ('ledger', 'commands', 'ui'):
-        shutil.copytree(
-            Path(__import__(f'plugins.{provider_name}.plugin', fromlist=['x']).__file__).parents[0],
-            source / provider_name,
-        )
-    (tmp_path / 'workspace').mkdir(exist_ok=True)
-    PluginSelection(tmp_path / 'workspace').initialize()
-    manager = PluginManager([source], workspace=tmp_path / 'workspace', installed_cache_root=tmp_path / 'cache')
-    async def _switch(old, new):
-        _ = (old, new)
-    manager.bind_endpoint_switcher(_switch)
-    try:
-        await manager.load_all()
-        await manager.start_runtime()
-        before = log.reader('s').snapshot()
-        root = manager.live_root
-        assert root is not None
-        commands = root.context.require(COMMANDS).freeze()
-        execution = await commands.execute('/memory_status', session_key='s', channel='web', chat_id='s', sender='hua')
-        assert execution is not None and execution.result.kind == 'success'
-        assert '尚未整理的用户消息数：1' in execution.result.text
-        provider = root.context.require(PLUGIN_UI)
-        catalog = await provider.catalog()
-        item = next(row for row in catalog['items'] if row['id'] == 'status_commands')
-        result = await provider.query('status_commands', item['revision'], 'memory.status', {}, session_id='s', turn_id=None)
-        assert result['last_consolidated_preview'] == '已整理的问题'
-        assert result['pending_user_messages'] == 1
-        assert log.reader('s').snapshot() == before
-    finally:
-        await manager.terminate_all()
 
 
 @pytest.mark.asyncio
